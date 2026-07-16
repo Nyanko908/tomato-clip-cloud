@@ -16,22 +16,6 @@ services:
       # ⭐ これ1つだけ貼ればOK：アプリの「☁ クラウド」→ セットアップで発行される鍵
       - key: TOMATO_ACCOUNT_TOKEN
         sync: false
-      # ── 以下はすべて任意（アカウント連携を使うなら不要） ──
-      - key: TOMATO_BUNDLE
-        sync: false
-      - key: TOMATO_BUNDLE_KEY
-        sync: false
-      - key: GEMINI_KEY
-        sync: false
-      - key: YOUTUBE_KEY
-        sync: false
-      - key: DISCORD_BOT_TOKEN
-        sync: false
-      - key: CREDENTIALS_JSON
-        sync: false
-      - key: YT_TOKEN_B64
-        sync: false
-      - key: YTDLP_COOKIES_B64
-        sync: false
-      - key: YTDLP_PROXY
-        sync: false
+      # ── 任意の env（GEMINI_KEY / DISCORD_BOT_TOKEN / TOMATO_BUNDLE 等）は、
+      #    アカウント連携を使う場合は不要。必要な上級者はデプロイ後に
+      #    Render の Environment 画面から手動で追加してください。
