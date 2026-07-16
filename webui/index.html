@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tomato Clip</title>
+<style>
+  :root{
+    --ground:#ffffff; --panel:#f7f7f8; --ink:#1d1d20; --muted:#6b6b76; --faint:#9a9aa2;
+    --line:#eaeaee; --hover:#f0f0f2; --active:#ececf0;
+    --tomato:#e5503c; --tomato-press:#cf432f; --tomato-tint:#fdeeeb;
+    --shadow:0 1px 2px rgba(20,20,25,.04), 0 8px 30px rgba(20,20,25,.06);
+    --userbub:#f0f0f2;
+    --radius:16px; --sidebar-w:264px;
+  }
+  /* ライト固定（ダークモードは廃止） */
+
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{background:var(--ground);color:var(--ink);
+    font-family:"Inter",system-ui,-apple-system,"Segoe UI","Yu Gothic UI","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;font-size:15px;line-height:1.5;
+    overflow:hidden;}
+  .app{display:flex;height:100vh;position:relative;overflow:hidden;}
+
+  /* Sidebar */
+  /* サイドバーは絶対配置。transform で横スライド（GPU合成＝ヌルヌル） */
+  .sidebar{position:absolute;left:0;top:0;bottom:0;width:var(--sidebar-w);z-index:10;
+    background:var(--panel);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;padding:10px;
+    will-change:transform;transition:transform .4s cubic-bezier(.32,.72,0,1);}
+  .app.sidebar-collapsed .sidebar{transform:translateX(-100%);}
+  /* 本文はサイドバー幅ぶん右に。折りたたみで左に寄る（サイドバーと同じ動き） */
+  .main{margin-left:var(--sidebar-w);transition:margin-left .4s cubic-bezier(.32,.72,0,1);}
+  .app.sidebar-collapsed .main{margin-left:0;}
+  .topbar-left{display:flex;align-items:center;gap:4px;}
+  /* サイドバートグルは常時表示（これ1つで開閉） */
+  .sidebar-toggle{display:flex;}
+  .brand{display:flex;align-items:center;gap:9px;padding:8px 8px 12px;}
+  .brand .name{font-weight:600;letter-spacing:-.01em;}
+  .brand-logo{width:24px;height:24px;flex:0 0 24px;object-fit:contain;}
+  .side-scroll{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:2px;}
+  .navitem{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:11px;color:var(--ink);
+    cursor:pointer;font-size:14px;font-weight:450;transition:background .12s;border:none;background:none;width:100%;text-align:left;}
+  .navitem:hover{background:var(--hover);}
+  .navitem.active{background:var(--active);font-weight:550;}
+  .navitem svg{flex:0 0 18px;color:var(--muted);}
+  .navitem.active svg{color:var(--ink);}
+  .sec{margin:16px 8px 6px;font-size:11.5px;font-weight:600;letter-spacing:.04em;color:var(--faint);}
+  .conv{display:block;padding:8px 10px;border-radius:11px;color:var(--muted);font-size:13.5px;cursor:pointer;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background .12s,color .12s;
+    border:none;background:none;width:100%;text-align:left;}
+  .conv:hover{background:var(--hover);color:var(--ink);}
+  .conv.on{background:var(--active);color:var(--ink);font-weight:500;}
+  .side-account{position:relative;border-top:1px solid var(--line);margin-top:8px;display:flex;align-items:center;gap:11px;
+    padding:10px 8px 4px;border-radius:11px;cursor:pointer;}
+  .side-account:hover{background:var(--hover);}
+  /* アイコン周囲のクレジット円周リング（JSで背景を設定。Proはグラデ、デモは残量比例） */
+  .avatar-ring{width:38px;height:38px;flex:0 0 38px;border-radius:50%;padding:3px;
+    background:conic-gradient(var(--line) 0deg,var(--line) 360deg);transition:background .3s;}
+  .avatar{width:100%;height:100%;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#2563eb);
+    color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;
+    border:2px solid var(--panel);}
+  .who{display:flex;flex-direction:column;line-height:1.2;min-width:0;}
+  .who b{font-size:13.5px;font-weight:550;} .who span{font-size:11.5px;color:var(--faint);}
+  /* ホバーで出るアカウントメニュー（上方向にポップ） */
+  .acct-menu{position:absolute;left:6px;right:6px;bottom:calc(100% + 5px);display:none;flex-direction:column;gap:2px;
+    background:var(--ground);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:6px;z-index:30;}
+  .acct-menu::before{content:"";position:absolute;left:0;right:0;bottom:-9px;height:9px;}
+  .side-account:hover .acct-menu{display:flex;}
+  .acct-credit{font-size:11.5px;color:var(--faint);padding:6px 10px 4px;}
+  .acct-credit b{color:var(--ink);font-weight:600;}
+  .acct-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;border:none;background:none;
+    color:var(--ink);font:inherit;font-size:13.5px;font-weight:500;cursor:pointer;text-align:left;width:100%;}
+  .acct-item:hover{background:var(--hover);}
+  .acct-item svg{width:17px;height:17px;flex:0 0 17px;color:var(--muted);}
+
+  /* Main */
+  .main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative;}
+  .topbar{height:52px;flex:0 0 52px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;}
+  .model{display:flex;align-items:center;gap:6px;font-weight:600;padding:7px 10px;border-radius:10px;cursor:pointer;border:none;background:none;color:var(--ink);font-size:15px;}
+  .model:hover{background:var(--hover);} .model svg{color:var(--faint);}
+  .toolbtn{width:36px;height:36px;border-radius:9px;border:none;background:none;color:var(--muted);cursor:pointer;
+    display:flex;align-items:center;justify-content:center;transition:background .12s;}
+  .toolbtn:hover{background:var(--hover);color:var(--ink);}
+
+  .scroll{flex:1;overflow-y:auto;}
+  /* Welcome (empty) state */
+  .welcome{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 24px 8vh;}
+  .hello{font-size:30px;font-weight:600;letter-spacing:-.02em;text-align:center;margin:0 0 10px;
+    display:flex;align-items:center;justify-content:center;gap:2px;}
+  .hero-logo{width:34px;height:34px;vertical-align:-6px;flex:0 0 34px;object-fit:contain;}
+  .subtitle{color:var(--muted);font-size:15px;text-align:center;max-width:30rem;margin:0 0 30px;}
+  .hint-line{margin-top:26px;font-size:12.5px;color:var(--faint);text-align:center;max-width:34rem;}
+
+  /* Thread (conversation) */
+  .thread{max-width:760px;margin:0 auto;padding:20px 20px 8px;display:flex;flex-direction:column;gap:20px;}
+  .msg{display:flex;gap:12px;}
+  .msg.user{justify-content:flex-end;}
+  .msg.user .bubble{background:var(--userbub);border-radius:20px;padding:10px 16px;max-width:78%;white-space:pre-wrap;}
+  .msg.ai{align-items:flex-start;}
+  .ai-avatar{width:26px;height:26px;flex:0 0 26px;margin-top:2px;object-fit:contain;}
+  .ai-body{flex:1;min-width:0;}
+  .ai-body .txt{white-space:pre-wrap;}
+  .ai-body .txt.md{white-space:normal;}
+  .ai-body .txt a{color:var(--tomato);}
+  .ai-body .md-p{white-space:normal;}
+  .ai-body .md-p + .md-p, .ai-body .md-p + .md-ul, .ai-body .md-ul + .md-p, .ai-body .md-h{margin-top:8px;}
+  .ai-body .md-ul{margin:6px 0;padding-left:20px;}
+  .ai-body .md-ul li{margin:3px 0;}
+  .ai-body .md-h{font-weight:600;} .ai-body .md-h1{font-size:17px;} .ai-body .md-h2{font-size:15.5px;} .ai-body .md-h3{font-size:14.5px;}
+  .ai-body strong{font-weight:650;}
+  .ai-body code{background:var(--hover);padding:1px 5px;border-radius:5px;font-size:.9em;}
+
+  /* progress card */
+  .card{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--ground);box-shadow:var(--shadow);margin-top:4px;}
+  .card .hd{display:flex;align-items:center;gap:9px;font-weight:600;font-size:14px;}
+  .spinner{width:15px;height:15px;border:2px solid var(--line);border-top-color:var(--tomato);border-radius:50%;animation:spin .8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .card .step{margin-top:8px;color:var(--muted);font-size:13.5px;white-space:pre-wrap;}
+  .card.done .spinner{display:none;}
+  .card .check{color:var(--tomato);}
+
+  /* video card */
+  .vcard{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--ground);box-shadow:var(--shadow);margin-top:6px;max-width:340px;}
+  .vcard video{width:100%;display:block;background:#000;max-height:520px;}
+  .vcard .meta{padding:12px 14px;}
+  .vcard .vtitle{font-weight:600;font-size:14.5px;}
+  .vcard .vsub{color:var(--muted);font-size:12.5px;margin-top:2px;}
+  .vcard .acts{display:flex;gap:8px;margin-top:12px;}
+  .btn{border:1px solid var(--line);background:var(--ground);color:var(--ink);border-radius:10px;padding:8px 14px;font:inherit;font-size:13px;font-weight:550;cursor:pointer;transition:background .12s;}
+  .btn:hover{background:var(--hover);}
+  .btn.primary{background:var(--tomato);color:#fff;border-color:var(--tomato);}
+  .btn.primary:hover{background:var(--tomato-press);}
+
+  /* Composer */
+  .dock{padding:6px 16px 18px;}
+  .composer{width:min(760px,100%);margin:0 auto;background:var(--ground);border:1px solid var(--line);
+    border-radius:28px;box-shadow:var(--shadow);padding:8px;display:flex;align-items:flex-end;gap:8px;
+    transition:border-color .15s,box-shadow .15s;}
+  .composer:focus-within{border-color:color-mix(in srgb,var(--tomato) 55%,var(--line));}
+  .iconbtn{width:38px;height:38px;flex:0 0 38px;border-radius:50%;border:none;background:none;color:var(--muted);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .12s,color .12s;}
+  .iconbtn:hover{background:var(--hover);color:var(--ink);}
+  .field{flex:1;border:none;outline:none;background:none;resize:none;color:var(--ink);font:inherit;font-size:15.5px;
+    line-height:1.5;padding:9px 2px;max-height:180px;}
+  .field::placeholder{color:var(--faint);}
+  .send{width:38px;height:38px;flex:0 0 38px;border-radius:50%;border:none;cursor:pointer;color:#fff;
+    background:var(--tomato);display:flex;align-items:center;justify-content:center;transition:background .12s,transform .08s;}
+  .send:hover{background:var(--tomato-press);} .send:active{transform:scale(.94);}
+  .send:disabled{opacity:.4;cursor:default;}
+
+  .chips{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;width:min(760px,100%);margin:20px auto 0;}
+  .chip{display:inline-flex;align-items:center;gap:8px;padding:9px 15px;border-radius:999px;border:1px solid var(--line);
+    background:var(--ground);color:var(--ink);font-size:13.5px;font-weight:500;cursor:pointer;
+    transition:background .13s,transform .13s;}
+  .chip:hover{background:var(--hover);transform:translateY(-1px);}
+  .chip svg{width:16px;height:16px;color:var(--tomato);}
+  .chip.ghost svg{color:var(--muted);}
+
+  :focus-visible{outline:2px solid var(--tomato);outline-offset:2px;}
+  /* テキスト入力はピル自体の focus-within で表現するため、内側の四角いフォーカス枠は消す */
+  .field:focus-visible, .search-field:focus-visible, .inp:focus-visible{outline:none;}
+
+  /* Overlay / Modal（設定・初回セットアップ） */
+  .overlay{position:fixed;inset:0;background:rgba(20,20,25,.42);display:none;align-items:center;justify-content:center;z-index:50;padding:20px;}
+  .overlay.on{display:flex;}
+  .modal{background:var(--ground);border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow);width:min(560px,100%);max-height:88vh;overflow-y:auto;}
+  .modal-hd{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--ground);z-index:1;}
+  .modal-hd h2{margin:0;font-size:17px;font-weight:600;}
+  .modal-bd{padding:20px 22px;display:flex;flex-direction:column;gap:22px;}
+  .fg{display:flex;flex-direction:column;gap:8px;}
+  .fg > label{font-size:13.5px;font-weight:550;}
+  .fg .sub{font-size:11.5px;color:var(--faint);margin-top:-2px;}
+  .sec-title{font-size:11.5px;font-weight:600;letter-spacing:.04em;color:var(--faint);}
+  .inp{border:1px solid var(--line);background:var(--ground);color:var(--ink);border-radius:10px;padding:9px 12px;font:inherit;font-size:14px;width:100%;}
+  .inp:focus{outline:none;border-color:color-mix(in srgb,var(--tomato) 55%,var(--line));}
+  select.inp{appearance:auto;cursor:pointer;}
+  .row{display:flex;gap:8px;align-items:center;}
+  .row .inp{flex:1;}
+  .seg{font-size:12px;color:var(--faint);min-height:1em;}
+  .seg.ok{color:#3aa552;} .seg.ng{color:var(--tomato);}
+  .plan-badge{display:inline-block;padding:3px 11px;border-radius:999px;font-size:12px;font-weight:650;background:var(--tomato-tint);color:var(--tomato);}
+  .modal a{color:var(--tomato);cursor:pointer;text-decoration:none;font-size:13.5px;}
+  .modal a:hover{text-decoration:underline;}
+  .legal-body{font-size:13px;line-height:1.65;color:var(--ink);}
+  .legal-body h4{margin:14px 0 4px;font-size:13.5px;} .legal-body p{margin:0 0 6px;color:var(--muted);}
+  .ob-hero{display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px;padding:12px 0 4px;}
+  .ob-hero .hero-logo{width:44px;height:44px;}
+  .ob-hero h2{font-size:22px;margin:0;font-weight:600;}
+  .ob-hero p{color:var(--muted);margin:0;max-width:30rem;}
+  .check-row{display:flex;align-items:flex-start;gap:9px;font-size:13.5px;}
+  .check-row input{margin-top:3px;width:16px;height:16px;accent-color:var(--tomato);}
+  .btn.block{width:100%;justify-content:center;padding:11px;}
+  .btn:disabled{opacity:.45;cursor:default;}
+  .cloud-only{background:var(--tomato-tint);color:var(--tomato-press);border:1px solid color-mix(in srgb,var(--tomato) 30%,var(--line));
+    border-radius:12px;padding:12px 14px;font-size:13.5px;font-weight:550;}
+
+  /* 会話検索ビュー（本文エリア全面） */
+  .search-panel{position:absolute;top:52px;left:0;right:0;bottom:0;background:var(--ground);
+    z-index:20;overflow-y:auto;display:flex;justify-content:center;padding:8px 24px 40px;}
+  .search-col{width:100%;max-width:680px;}
+  .search-box{display:flex;align-items:center;gap:12px;background:var(--ground);border:1px solid var(--line);
+    border-radius:999px;box-shadow:var(--shadow);padding:14px 20px;margin:24px 0 8px;
+    transition:border-color .15s,box-shadow .15s;}
+  .search-box:focus-within{border-color:color-mix(in srgb,var(--tomato) 45%,var(--line));}
+  .search-box .search-ic{color:var(--faint);flex:0 0 20px;}
+  .search-field{flex:1;border:none;outline:none;background:none;color:var(--ink);font:inherit;font-size:16px;}
+  .search-field::placeholder{color:var(--faint);}
+  .search-close{border:none;background:none;color:var(--faint);cursor:pointer;font-size:16px;
+    width:28px;height:28px;border-radius:50%;flex:0 0 28px;transition:background .12s,color .12s;}
+  .search-close:hover{background:var(--hover);color:var(--ink);}
+  .search-recent-label{font-size:12.5px;font-weight:600;color:var(--faint);padding:14px 12px 6px;}
+  .search-results{display:flex;flex-direction:column;gap:1px;}
+  .sresult{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:none;background:none;
+    cursor:pointer;padding:13px 16px;border-radius:12px;transition:background .12s;}
+  .sresult:hover{background:var(--hover);}
+  .sresult .st-main{flex:1;min-width:0;}
+  .sresult .st{font-size:14.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .sresult .ss{font-size:12.5px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .sresult .sdate{font-size:12.5px;color:var(--faint);flex:0 0 auto;white-space:nowrap;}
+  .sresult mark{background:var(--tomato-tint);color:var(--tomato-press);border-radius:3px;padding:0 1px;}
+  .search-empty{color:var(--faint);font-size:13.5px;text-align:center;padding:40px 0;}
+
+  /* 統計タイル */
+  .stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .stat-grid-4{grid-template-columns:repeat(4,1fr);}
+  .stat-tile{border:1px solid var(--line);border-radius:14px;padding:14px 12px;text-align:center;background:var(--ground);}
+  .stat-num{font-size:22px;font-weight:700;letter-spacing:-.02em;color:var(--ink);}
+  .stat-lbl{font-size:11.5px;color:var(--muted);margin-top:4px;}
+
+  /* 統計ダッシュボード（本文エリア全面・Studio風） */
+  .stats-panel{position:absolute;top:52px;left:0;right:0;bottom:0;background:var(--ground);
+    z-index:20;overflow-y:auto;display:flex;justify-content:center;padding:8px 24px 48px;}
+  .stats-col{width:100%;max-width:960px;}
+  .stats-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 4px 14px;}
+  .stats-ch{display:flex;align-items:center;gap:12px;min-width:0;}
+  .stats-ch-thumb{width:46px;height:46px;border-radius:50%;flex:0 0 46px;object-fit:cover;background:var(--hover);}
+  .stats-ch-meta{min-width:0;}
+  .stats-ch-title{font-size:18px;font-weight:650;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .stats-ch-sub{font-size:12px;color:var(--faint);margin-top:1px;}
+  .stats-head-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+  .dash-loading{color:var(--faint);text-align:center;padding:60px 0;font-size:14px;}
+  .dash-error{color:var(--muted);text-align:center;padding:40px 20px;font-size:14px;line-height:1.7;}
+  .dash-error .btn{margin-top:14px;}
+  .dash-charts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;}
+  @media (max-width:820px){.dash-charts{grid-template-columns:1fr;} .stat-grid-4{grid-template-columns:repeat(2,1fr);}}
+  .dash-card{border:1px solid var(--line);border-radius:16px;padding:16px;background:var(--ground);margin-top:12px;}
+  .dash-charts .dash-card{margin-top:0;}
+  .dash-card-t{font-size:13px;font-weight:600;color:var(--muted);margin-bottom:12px;}
+  .dash-empty-chart{color:var(--faint);font-size:12.5px;text-align:center;padding:36px 0;}
+  /* SVG チャート */
+  .dchart{width:100%;display:block;overflow:visible;}
+  .dchart .grid{stroke:var(--line);stroke-width:1;}
+  .dchart .axis{fill:var(--faint);font-size:10px;}
+  .dchart .line{fill:none;stroke:var(--tomato);stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+  .dchart .area{fill:var(--tomato);opacity:.08;}
+  .dchart .dot{fill:var(--tomato);}
+  .dchart .bar{fill:var(--tomato);}
+  .dchart .barlbl{fill:var(--ink);font-size:11px;}
+  .dchart .barval{fill:var(--muted);font-size:11px;}
+  .dchart .hit{fill:transparent;cursor:pointer;}
+  /* テーブル */
+  .dash-table-wrap{overflow-x:auto;}
+  .dash-table{width:100%;border-collapse:collapse;font-size:13px;}
+  .dash-table th{text-align:right;color:var(--faint);font-weight:600;font-size:11.5px;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  .dash-table th.l,.dash-table td.l{text-align:left;}
+  .dash-table td{text-align:right;padding:10px;border-bottom:1px solid var(--line);color:var(--ink);white-space:nowrap;}
+  .dash-table tr:hover td{background:var(--hover);}
+  .dash-vid{display:flex;align-items:center;gap:10px;max-width:340px;}
+  .dash-vid img{width:52px;height:30px;border-radius:6px;object-fit:cover;flex:0 0 52px;background:var(--hover);}
+  .dash-vid span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .dash-empty{color:var(--faint);text-align:center;padding:30px 0;font-size:13.5px;}
+
+  /* スケジュール（週間タイムライン・DnD） */
+  .sched-panel{position:absolute;top:52px;left:0;right:0;bottom:0;background:var(--ground);
+    z-index:20;overflow-y:auto;display:flex;justify-content:center;padding:8px 20px 40px;}
+  .sched-col{width:100%;max-width:1000px;}
+  .sched-head{display:flex;align-items:center;gap:14px;padding:16px 4px 10px;}
+  .sched-title{font-size:18px;font-weight:650;}
+  .sched-weeknav{display:flex;align-items:center;gap:6px;margin-left:auto;}
+  .sched-weeknav #schedWeekLabel{font-size:13px;color:var(--muted);min-width:120px;text-align:center;}
+  .sched-palette{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 4px 14px;}
+  .sched-hint{font-size:12.5px;color:var(--faint);}
+  .pchip{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:999px;
+    border:1px solid var(--line);background:var(--tomato-tint);color:var(--tomato-press);
+    font-size:13px;font-weight:600;cursor:grab;user-select:none;}
+  .pchip:active{cursor:grabbing;}
+  .sched-grid-wrap{overflow-x:auto;}
+  .sched-grid{width:100%;border-collapse:collapse;table-layout:fixed;min-width:640px;}
+  .sched-grid th{font-size:12px;font-weight:600;color:var(--muted);padding:8px 4px;text-align:center;
+    border-bottom:1px solid var(--line);}
+  .sched-grid th.today{color:var(--tomato);}
+  .sched-grid th .th-d{font-size:16px;font-weight:700;color:var(--ink);}
+  .sched-grid th.today .th-d{color:var(--tomato);}
+  .sched-grid td{border:1px solid var(--line);height:52px;vertical-align:top;padding:3px;
+    transition:background .1s;}
+  .sched-grid td.timecol{border:none;font-size:11px;color:var(--faint);text-align:right;
+    padding-right:8px;width:52px;vertical-align:middle;}
+  .sched-grid td.past{background:repeating-linear-gradient(45deg,transparent,transparent 5px,var(--panel) 5px,var(--panel) 6px);}
+  .sched-grid td.dragover{background:var(--tomato-tint);outline:2px dashed var(--tomato);outline-offset:-3px;}
+  .scard{display:flex;align-items:center;gap:5px;background:var(--tomato);color:#fff;border-radius:8px;
+    padding:4px 6px;font-size:11.5px;font-weight:600;cursor:grab;margin-bottom:3px;line-height:1.2;}
+  .scard.rep{background:linear-gradient(135deg,#e5503c,#f6883c);}
+  .scard:active{cursor:grabbing;}
+  .scard .x{margin-left:auto;cursor:pointer;opacity:.85;font-size:12px;padding:0 2px;}
+  .scard .x:hover{opacity:1;}
+  .sched-empty-note{color:var(--faint);font-size:12.5px;padding:10px 4px;}
+
+  /* クラウド セットアップ（イントロ → 起動） */
+  .cloud-panel{position:absolute;top:52px;left:0;right:0;bottom:0;background:var(--ground);
+    z-index:20;overflow-y:auto;display:flex;justify-content:center;}
+  .cloud-x{position:absolute;top:12px;right:16px;z-index:2;}
+  .cloud-screen{width:100%;max-width:640px;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;min-height:100%;padding:40px 24px 60px;text-align:center;}
+  /* 画面A：イントロ */
+  .cloud-intro{display:flex;flex-direction:column;align-items:center;gap:6px;animation:cloudFade .4s ease;}
+  .cloud-logo{width:64px;height:64px;object-fit:contain;margin-bottom:6px;}
+  .cloud-badge{font-size:14px;color:var(--muted);letter-spacing:.02em;}
+  .cloud-badge b{color:var(--tomato);}
+  .cloud-h1{font-size:29px;font-weight:700;letter-spacing:-.02em;line-height:1.3;margin:12px 0 6px;}
+  .cloud-p{color:var(--muted);font-size:15px;line-height:1.75;max-width:30rem;margin:0 0 12px;}
+  .cloud-cta{padding:13px 34px;font-size:15px;border-radius:14px;margin-top:8px;}
+  .cloud-status{margin-top:16px;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);
+    background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:8px 16px;}
+  .cloud-status .dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px;}
+  .cloud-status .dot.on{background:#3aa552;box-shadow:0 0 0 3px rgba(58,165,82,.15);}
+  .cloud-status .dot.off{background:var(--faint);}
+  .cloud-status a{color:var(--tomato);text-decoration:none;font-weight:600;margin-left:4px;}
+  @keyframes cloudFade{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
+  /* 画面B：起動 */
+  .cloud-launch{display:flex;flex-direction:column;align-items:center;gap:16px;width:100%;animation:cloudFade .4s ease;position:relative;}
+  .cloud-back{position:absolute;left:0;top:-6px;border:none;background:none;color:var(--muted);cursor:pointer;
+    font-size:13.5px;display:flex;align-items:center;gap:2px;}
+  .cloud-back:hover{color:var(--ink);}
+  .cloud-h2{font-size:18px;font-weight:600;line-height:1.5;margin:6px 0 0;max-width:30rem;}
+  /* 黒いターミナル風パネル＋セットアップ演出 */
+  .cloud-term{width:100%;max-width:560px;background:#0e0f13;border-radius:14px;overflow:hidden;
+    box-shadow:0 10px 40px rgba(0,0,0,.25);cursor:pointer;border:1px solid #1c1e26;}
+  .cloud-term-bar{display:flex;align-items:center;gap:7px;padding:9px 13px;background:#171921;}
+  .cloud-term-bar .dot{width:11px;height:11px;border-radius:50%;}
+  .cloud-term-bar .dot.r{background:#ff5f57;} .cloud-term-bar .dot.y{background:#febc2e;} .cloud-term-bar .dot.g{background:#28c840;}
+  .cloud-term-title{margin-left:8px;color:#6b6e7a;font-size:11.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  .cloud-term-body{height:196px;padding:14px 16px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:12.5px;line-height:1.7;color:#c8ccd4;text-align:left;overflow:hidden;}
+  .cloud-term-body .ln{white-space:pre;}
+  .cloud-term-body .g{color:#3ddc84;} .cloud-term-body .t{color:#ff7a63;} .cloud-term-body .d{color:#6b6e7a;}
+  .cloud-term-body .cur{display:inline-block;width:8px;height:15px;background:#ff7a63;vertical-align:-2px;
+    animation:cblink 1s steps(1) infinite;}
+  @keyframes cblink{50%{opacity:0;}}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;}}
+  @media (max-width:760px){.sidebar{display:none;}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <img class="brand-logo" src="logo.png" alt="" aria-hidden="true">
+      <span class="name">Tomato&nbsp;Clip</span>
+    </div>
+    <div class="side-scroll">
+      <button class="navitem active" onclick="chatUI.newChat()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        <span data-i18n="新しい会話">新しい会話</span>
+      </button>
+      <button class="navitem" onclick="chatUI.openSearch&&chatUI.openSearch()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg><span data-i18n="検索">検索</span></button>
+      <button class="navitem"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="5" height="16" rx="1.2"/><rect x="10" y="4" width="5" height="16" rx="1.2"/><path d="M18.5 5.2 21 20"/></svg><span data-i18n="ライブラリ">ライブラリ</span></button>
+      <button class="navitem" onclick="chatUI.openCloud&&chatUI.openCloud()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 0 0 .5-8.98 6 6 0 0 0-11.64-1.5A4 4 0 0 0 6.5 19Z"/></svg><span data-i18n="クラウド">クラウド</span></button>
+      <button class="navitem" onclick="chatUI.openPlugins&&chatUI.openPlugins()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 3v3.5a1.5 1.5 0 0 0 3 0V3M3 10.5h3.5a1.5 1.5 0 0 1 0 3H3M14 21v-3.2a1.6 1.6 0 0 1 1.6-1.6H21"/><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg><span data-i18n="プラグイン">プラグイン</span></button>
+      <div class="sec" data-i18n="会話履歴">会話履歴</div>
+      <div id="convList"></div>
+    </div>
+    <div class="side-account" id="sideAccount">
+      <div class="acct-menu" id="acctMenu">
+        <div class="acct-credit" id="acctCredit"></div>
+        <button class="acct-item" id="acctLoginItem" onclick="chatUI.accountLogin&&chatUI.accountLogin()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5M15 12H3"/></svg>
+          <span id="acctLoginLabel" data-i18n="ログイン">ログイン</span></button>
+        <button class="acct-item" onclick="chatUI.openSettings&&chatUI.openSettings()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+          <span data-i18n="設定">設定</span></button>
+        <button class="acct-item" onclick="chatUI.openSchedule&&chatUI.openSchedule()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16" rx="2.5"/><path d="M3 9h18M8 2.5v4M16 2.5v4"/></svg>
+          <span data-i18n="スケジュール">スケジュール</span></button>
+        <button class="acct-item" onclick="chatUI.openStats&&chatUI.openStats()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+          <span data-i18n="統計">統計</span></button>
+      </div>
+      <div class="avatar-ring" id="avatarRing"><div class="avatar">匿</div></div>
+      <div class="who"><b data-i18n="匿名希望">匿名希望</b><span id="accPlan">デモモード</span></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="toolbtn sidebar-toggle" onclick="chatUI.toggleSidebar&&chatUI.toggleSidebar()" title="サイドバー" data-i18n-title="サイドバー" aria-label="サイドバー">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+        </button>
+        <button class="model">Tomato Clip <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
+      </div>
+      <button class="toolbtn" id="settingsBtn" title="設定" data-i18n-title="設定" aria-label="設定" onclick="chatUI.openSettings&&chatUI.openSettings()">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+      </button>
+    </header>
+
+    <div class="scroll" id="scroll">
+      <!-- welcome (empty) -->
+      <section class="welcome" id="welcome">
+        <h1 class="hello"><span data-i18n="はじめまして">はじめまして</span>&nbsp;<img class="hero-logo" src="logo.png" alt="" aria-hidden="true"></h1>
+        <p class="subtitle" data-i18n="何をつくりましょう？ 話しかけるだけで、AI がショート動画をつくります。">何をつくりましょう？ 話しかけるだけで、AI がショート動画をつくります。</p>
+        <div class="chips">
+          <button class="chip" data-i18n-prompt="動画を1本つくって" onclick="chatUI.chipEl(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m10 9 5 3-5 3Z"/></svg><span data-i18n="動画をつくる">動画をつくる</span></button>
+          <button class="chip" data-i18n-prompt="このURLから動画をつくって: " onclick="chatUI.chipEl(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg><span data-i18n="URLから作る">URLから作る</span></button>
+          <button class="chip" data-i18n-prompt="今のトレンドを分析して" onclick="chatUI.chipEl(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-5 4 4 8-8"/><path d="M17 4h4v4"/></svg><span data-i18n="トレンドを見る">トレンドを見る</span></button>
+          <button class="chip ghost" data-i18n-prompt="このアプリで何ができる？ヒントを教えて" onclick="chatUI.chipEl(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.5.4.8.9.9 1.6h5.2c.1-.7.4-1.2.9-1.6A6 6 0 0 0 12 3Z"/></svg><span data-i18n="ヒントを見る">ヒントを見る</span></button>
+        </div>
+        <p class="hint-line" data-i18n="「アイアンマウスの切り抜きを3本つくって、明日の朝6時に投稿して」— そんな風に話しかけてみてください。">「アイアンマウスの切り抜きを3本つくって、明日の朝6時に投稿して」— そんな風に話しかけてみてください。</p>
+      </section>
+      <!-- conversation -->
+      <div class="thread" id="thread" style="display:none"></div>
+    </div>
+
+    <div class="dock">
+      <div class="composer">
+        <button class="iconbtn" title="素材を添付" data-i18n-title="素材を添付" aria-label="素材を添付"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
+        <textarea class="field" id="field" rows="1" placeholder="動画をつくる、トレンドを調べる…話しかけてみよう" data-i18n-ph="動画をつくる、トレンドを調べる…話しかけてみよう"></textarea>
+        <button class="iconbtn" title="音声で話す" data-i18n-title="音声で話す" aria-label="音声で話す"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+        <button class="send" id="send" title="送信" data-i18n-title="送信" aria-label="送信"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+      </div>
+    </div>
+
+    <!-- 会話検索ビュー（サイドバー右の本文エリア全面） -->
+    <div class="search-panel" id="searchPanel" style="display:none">
+      <div class="search-col">
+        <div class="search-box">
+          <svg class="search-ic" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+          <input id="searchInput" class="search-field" type="text" autocomplete="off"
+                 placeholder="チャットを検索" data-i18n-ph="チャットを検索">
+          <button class="search-close" onclick="chatUI.closeSearch()" aria-label="閉じる" data-i18n-title="閉じる" title="閉じる">✕</button>
+        </div>
+        <div class="search-recent-label" id="searchLabel" data-i18n="最近">最近</div>
+        <div id="searchResults" class="search-results"></div>
+      </div>
+    </div>
+
+    <!-- 統計ダッシュボード（サイドバー右の本文エリア全面・Studio風） -->
+    <div class="stats-panel" id="statsPanel" style="display:none">
+      <div class="stats-col">
+        <div class="stats-head">
+          <div class="stats-ch">
+            <img class="stats-ch-thumb" id="dashThumb" alt="" src="">
+            <div class="stats-ch-meta">
+              <div class="stats-ch-title" id="dashTitle">—</div>
+              <div class="stats-ch-sub" id="dashUpdated"></div>
+            </div>
+          </div>
+          <div class="stats-head-actions">
+            <button class="btn" id="dashRefresh" onclick="chatUI.refreshDashboard&&chatUI.refreshDashboard()" data-i18n="更新">更新</button>
+            <button class="toolbtn" onclick="chatUI.closeStats()" aria-label="閉じる" data-i18n-title="閉じる" title="閉じる">✕</button>
+          </div>
+        </div>
+        <div id="dashBody">
+          <div class="dash-loading" id="dashLoading" data-i18n="読み込み中…">読み込み中…</div>
+          <div id="dashContent" style="display:none">
+            <div class="stat-grid stat-grid-4">
+              <div class="stat-tile"><div class="stat-num" id="dashSubs">—</div><div class="stat-lbl" data-i18n="登録者数">登録者数</div></div>
+              <div class="stat-tile"><div class="stat-num" id="dashViews">—</div><div class="stat-lbl" data-i18n="総再生回数">総再生回数</div></div>
+              <div class="stat-tile"><div class="stat-num" id="dashVideos">—</div><div class="stat-lbl" data-i18n="動画数">動画数</div></div>
+              <div class="stat-tile"><div class="stat-num" id="dashEng">—</div><div class="stat-lbl" data-i18n="平均エンゲージ率">平均エンゲージ率</div></div>
+            </div>
+            <div class="dash-charts">
+              <div class="dash-card">
+                <div class="dash-card-t" data-i18n="登録者の推移">登録者の推移</div>
+                <div id="dashLine"></div>
+              </div>
+              <div class="dash-card">
+                <div class="dash-card-t" data-i18n="トップ動画（再生回数）">トップ動画（再生回数）</div>
+                <div id="dashBar"></div>
+              </div>
+            </div>
+            <div class="dash-card">
+              <div class="dash-card-t" data-i18n="動画一覧">動画一覧</div>
+              <div class="dash-table-wrap"><table class="dash-table" id="dashTable"></table></div>
+            </div>
+          </div>
+          <div class="dash-error" id="dashError" style="display:none"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- スケジュール（週間タイムライン・ドラッグ&ドロップ） -->
+    <div class="sched-panel" id="schedulePanel" style="display:none">
+      <div class="sched-col">
+        <div class="sched-head">
+          <div class="sched-title" data-i18n="スケジュール">スケジュール</div>
+          <div class="sched-weeknav">
+            <button class="toolbtn" onclick="chatUI.schedWeek&&chatUI.schedWeek(-1)" aria-label="前の週">‹</button>
+            <span id="schedWeekLabel"></span>
+            <button class="toolbtn" onclick="chatUI.schedWeek&&chatUI.schedWeek(1)" aria-label="次の週">›</button>
+            <button class="btn" onclick="chatUI.schedWeek&&chatUI.schedWeek(0)" data-i18n="今週">今週</button>
+          </div>
+          <button class="toolbtn" onclick="chatUI.closeSchedule()" aria-label="閉じる" data-i18n-title="閉じる" title="閉じる">✕</button>
+        </div>
+        <div class="sched-palette">
+          <span class="sched-hint" data-i18n="ドラッグしてカレンダーに置くと予約できます：">ドラッグしてカレンダーに置くと予約できます：</span>
+          <div class="pchip" draggable="true" data-count="1">🎬 <span data-i18n="動画1本">動画1本</span></div>
+          <div class="pchip" draggable="true" data-count="3">🎬 <span data-i18n="3本">3本</span></div>
+          <div class="pchip" draggable="true" data-count="5">🎬 <span data-i18n="5本">5本</span></div>
+        </div>
+        <div class="sched-grid-wrap">
+          <table class="sched-grid" id="schedGrid"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- クラウド セットアップ（2画面：イントロ → 起動） -->
+    <div class="cloud-panel" id="cloudPanel" style="display:none">
+      <button class="toolbtn cloud-x" onclick="chatUI.closeCloud()" aria-label="閉じる" data-i18n-title="閉じる" title="閉じる">✕</button>
+
+      <!-- 画面A：イントロ -->
+      <div class="cloud-screen" id="cloudScreenA">
+        <div class="cloud-intro">
+          <img class="cloud-logo" src="logo.png" alt="" aria-hidden="true">
+          <div class="cloud-badge">Tomato Clip <b>Cloud</b></div>
+          <h1 class="cloud-h1" data-i18n="PCを閉じても、24時間動くあなたのAI。">PCを閉じても、24時間動くあなたのAI。</h1>
+          <p class="cloud-p" data-i18n="自分のサーバーにデプロイすれば、動画生成もDiscordボットも止まりません。数分でセットアップできます。">自分のサーバーにデプロイすれば、動画生成もDiscordボットも止まりません。数分でセットアップできます。</p>
+          <button class="btn primary cloud-cta" onclick="chatUI.cloudGoLaunch()" data-i18n="始める">始める</button>
+          <div class="cloud-status" id="cloudStatus" style="display:none"></div>
+        </div>
+      </div>
+
+      <!-- 画面B：起動 -->
+      <div class="cloud-screen" id="cloudScreenB" style="display:none">
+        <div class="cloud-launch">
+          <button class="cloud-back" onclick="chatUI.cloudBack()" aria-label="戻る">‹ <span data-i18n="戻る">戻る</span></button>
+          <h2 class="cloud-h2" data-i18n="下をクリックして、指示に従いセットアップを完了しましょう。">下をクリックして、指示に従いセットアップを完了しましょう。</h2>
+          <div class="cloud-term" id="cloudTerm" onclick="chatUI.cloudLaunch()">
+            <div class="cloud-term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="cloud-term-title">tomato-clip-cloud-setup</span></div>
+            <div class="cloud-term-body" id="cloudTermBody"></div>
+          </div>
+          <button class="btn primary cloud-cta" id="cloudLaunchBtn" onclick="chatUI.cloudLaunch()" data-i18n="今すぐセットアップ">今すぐセットアップ</button>
+          <div class="seg" id="cloudLaunchSeg"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 設定 / 初回セットアップ / 法的情報 のオーバーレイ -->
+<div class="overlay" id="overlay">
+  <!-- 設定 -->
+  <div class="modal" id="modalSettings" style="display:none">
+    <div class="modal-hd"><h2 data-i18n="設定">設定</h2>
+      <button class="toolbtn" onclick="chatUI.closeOverlay()" aria-label="閉じる">✕</button></div>
+    <div class="modal-bd">
+      <div class="fg">
+        <div class="sec-title" data-i18n="🔑 APIキー">🔑 APIキー</div>
+        <label data-i18n="Gemini APIキー（必須）">Gemini APIキー（必須）</label>
+        <div class="row"><input class="inp" id="setGemini" type="password" placeholder="AIza..."><button class="btn" onclick="chatUI.testKey('gemini','set')" data-i18n="🔌 接続テスト">🔌 接続テスト</button></div>
+        <div class="seg" id="stGemini"></div>
+        <label data-i18n="YouTube APIキー（任意）">YouTube APIキー（任意）</label>
+        <div class="row"><input class="inp" id="setYoutube" type="password"><button class="btn" onclick="chatUI.testKey('youtube','set')" data-i18n="🔌 接続テスト">🔌 接続テスト</button></div>
+        <div class="seg" id="stYoutube"></div>
+        <button class="btn primary" onclick="chatUI.saveKeys()" data-i18n="保存">保存</button>
+        <div class="seg" id="stSave"></div>
+      </div>
+      <div class="fg">
+        <div class="sec-title" data-i18n="表示言語">表示言語</div>
+        <select class="inp" id="setUiLang" onchange="chatUI.changeLang(this.value)"></select>
+      </div>
+      <div class="fg">
+        <div class="sec-title" data-i18n="🔐 ライセンス">🔐 ライセンス</div>
+        <div><span class="plan-badge" id="setPlan">—</span> <span class="seg" id="setCredits" style="display:inline"></span></div>
+        <div class="row"><input class="inp" id="setLicense" placeholder="XXXXXXXX-XXXX-..."><button class="btn primary" onclick="chatUI.activate()" data-i18n="認証">認証</button></div>
+        <div class="seg" id="stLicense"></div>
+        <label data-i18n="🎟 プロモコード">🎟 プロモコード</label>
+        <div class="row"><input class="inp" id="setPromo" placeholder="TS-XXXX-XXXX"><button class="btn" onclick="chatUI.promo()" data-i18n="適用">適用</button></div>
+        <div class="seg" id="stPromo"></div>
+      </div>
+      <div class="fg">
+        <div class="row" style="gap:16px">
+          <a onclick="chatUI.showLegal('terms')" data-i18n="利用規約">利用規約</a>
+          <a onclick="chatUI.showLegal('privacy')" data-i18n="プライバシーポリシー">プライバシーポリシー</a>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- 初回セットアップ -->
+  <div class="modal" id="modalOnboard" style="display:none">
+    <div class="modal-bd">
+      <div class="ob-hero">
+        <img class="hero-logo" src="logo.png" alt="" aria-hidden="true">
+        <h2 data-i18n="Tomato Clip へようこそ">Tomato Clip へようこそ</h2>
+        <p data-i18n="話しかけるだけで、AIがYouTube向けショート動画をつくります。">話しかけるだけで、AIがYouTube向けショート動画をつくります。</p>
+      </div>
+      <div class="fg">
+        <div class="sec-title" data-i18n="表示言語">表示言語</div>
+        <select class="inp" id="obUiLang" onchange="chatUI.changeLang(this.value)"></select>
+      </div>
+      <div class="fg">
+        <label data-i18n="Gemini APIキー（必須）">Gemini APIキー（必須）</label>
+        <div class="row"><input class="inp" id="obGemini" type="password" placeholder="AIza..." oninput="chatUI.obValidate()"><button class="btn" onclick="chatUI.testKey('gemini','ob')" data-i18n="🔌 接続テスト">🔌 接続テスト</button></div>
+        <div class="seg" id="stObGemini"></div>
+        <label data-i18n="YouTube APIキー（任意）">YouTube APIキー（任意）</label>
+        <input class="inp" id="obYoutube" type="password">
+      </div>
+      <label class="check-row"><input type="checkbox" id="obAgree" onchange="chatUI.obValidate()"><span><span data-i18n="利用規約とプライバシーポリシーに同意します">利用規約とプライバシーポリシーに同意します</span> (<a onclick="chatUI.showLegal('terms')" data-i18n="利用規約">利用規約</a> / <a onclick="chatUI.showLegal('privacy')" data-i18n="プライバシーポリシー">プライバシーポリシー</a>)</span></label>
+      <button class="btn primary block" id="obStart" onclick="chatUI.finishOnboard()" disabled data-i18n="始める">始める</button>
+    </div>
+  </div>
+  <!-- 法的情報 -->
+  <div class="modal" id="modalLegal" style="display:none">
+    <div class="modal-hd"><h2 id="legalTitle">利用規約</h2>
+      <button class="toolbtn" onclick="chatUI.backFromLegal()" aria-label="閉じる">✕</button></div>
+    <div class="modal-bd"><div class="legal-body" id="legalBody"></div></div>
+  </div>
+  <!-- プラグイン -->
+  <div class="modal" id="modalPlugin" style="display:none">
+    <div class="modal-hd"><h2 data-i18n="プラグイン">プラグイン</h2>
+      <button class="toolbtn" onclick="chatUI.closeOverlay()" aria-label="閉じる">✕</button></div>
+    <div class="modal-bd">
+      <div class="ob-hero">
+        <svg class="hero-logo" viewBox="0 0 24 24" fill="none" stroke="var(--tomato)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 3v3.5a1.5 1.5 0 0 0 3 0V3M3 10.5h3.5a1.5 1.5 0 0 1 0 3H3M14 21v-3.2a1.6 1.6 0 0 1 1.6-1.6H21"/><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
+        <h2 data-i18n="プラグイン">プラグイン</h2>
+        <p data-i18n="Discord ボットなどの連携プラグイン。">Discord ボットなどの連携プラグイン。</p>
+      </div>
+      <div class="fg">
+        <div class="cloud-only" data-i18n="⚠️ プラグインはクラウド版でのみ動作します。">⚠️ プラグインはクラウド版でのみ動作します。</div>
+        <div class="sub" data-i18n="24時間稼働が必要なため、クラウドにデプロイした環境で利用できます。">24時間稼働が必要なため、クラウドにデプロイした環境で利用できます。</div>
+      </div>
+      <button class="btn block" onclick="chatUI.openCloud()" data-i18n="クラウドについて">クラウドについて</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

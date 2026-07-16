@@ -1,0 +1,34 @@
+# Fly.io デプロイ設定。
+#   fly launch --no-deploy   （初回。アプリ名を対話設定 or 下の app 名を編集）
+#   ⭐ かんたん設定（推奨）: fly secrets set TOMATO_BUNDLE='...' TOMATO_BUNDLE_KEY='...'
+#   （個別に設定する場合）: fly secrets set GEMINI_KEY=... DISCORD_BOT_TOKEN=... CREDENTIALS_JSON='...' YT_TOKEN_B64=...
+#   fly deploy
+app = "tomato-shorts-cloud"
+primary_region = "nrt"        # 東京。yt-dlp のIP対策で地域を変えたい場合はここを調整
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  TOMATO_HOME = "/tmp/tomato_home"
+  TOMATO_UNGATED = "1"
+  PORT = "8000"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false   # Discord Bot 24h稼働のため止めない
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/healthz"
+    interval = "30s"
+    timeout = "5s"
+
+[[vm]]
+  # 生成（ffmpeg/moviepy）は重い。メモリは最低1GB以上を推奨。
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 1024

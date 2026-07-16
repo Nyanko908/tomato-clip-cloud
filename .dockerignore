@@ -1,0 +1,18 @@
+# ビルド成果物・巨大/不要ファイルをイメージから除外
+dist/
+build/
+*.spec
+__pycache__/
+*.pyc
+.git/
+node_modules/
+BOOTH_購入者マニュアル/
+*.zip
+*.exe
+release_stage/
+.claude/
+# デスクトップ専用（クラウドでは未使用）
+main.py
+app.py
+build_exe.py
+installer.py

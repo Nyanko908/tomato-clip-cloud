@@ -1,0 +1,27 @@
+# Tomato Clip クラウド版（BYO-deploy）サーバー依存。
+# 本体 requirements.txt から Windows/GUI 専用（pywin32, pywebview）を除外し、
+# サーバー用（fastapi, uvicorn, discord.py）を追加したもの。
+
+# ── 生成の中核 ──
+google-genai>=1.0.0            # 新SDK（from google import genai）。chat_engine/pipeline が使用
+google-generativeai>=0.5.0    # 一部モジュールの後方互換 import 用
+moviepy>=1.0.3,<2.0           # 2.x は moviepy.editor を廃止＝コードが動かないため 1.x 固定
+imageio[ffmpeg]
+gtts>=2.5.0                   # クラウドTTS（VOICEVOX不在時の自動フォールバック）
+Pillow>=10.0.0
+numpy>=1.24.0
+librosa>=0.10.0
+yt-dlp>=2024.1.0
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.1.0
+requests>=2.31.0
+
+# ── サーバー ──
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+discord.py>=2.3.0
+
+# ── 設定移送（後続フェーズの暗号注入で使用予定。現状は宣言のみでも害なし） ──
+cryptography>=41.0.0
+
+# 注: playwright / pywebview / pywin32 は含めない（クラウドでは未使用・Linux非対応）。

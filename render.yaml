@@ -1,0 +1,35 @@
+# Render.com デプロイ設定（Docker）。
+# https://render.com → New → Blueprint → このリポジトリを指定。
+# 環境変数は Render のダッシュボードで設定（秘密なので下では sync:false）。
+services:
+  - type: web
+    name: tomato-clip-cloud
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter          # 無料枠はスリープ＝24h Bot稼働には有料枠推奨
+    healthCheckPath: /healthz
+    envVars:
+      - key: TOMATO_HOME
+        value: /tmp/tomato_home
+      - key: TOMATO_UNGATED
+        value: "1"
+      # ⭐ かんたん設定：cloud_setup.py / クラウドタブが発行する2つを貼るだけ
+      - key: TOMATO_BUNDLE
+        sync: false
+      - key: TOMATO_BUNDLE_KEY
+        sync: false
+      # ── 以下は個別に設定したい上級者向け（バンドルを使うなら不要） ──
+      - key: GEMINI_KEY
+        sync: false
+      - key: YOUTUBE_KEY
+        sync: false
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: CREDENTIALS_JSON      # client_secrets.json の中身（インラインJSON or base64）
+        sync: false
+      - key: YT_TOKEN_B64          # デスクトップで発行した yt_token.pickle を base64
+        sync: false
+      - key: YTDLP_COOKIES_B64     # 任意: yt-dlp cookies.txt を base64（429対策）
+        sync: false
+      - key: YTDLP_PROXY           # 任意: プロキシURL（429対策）
+        sync: false

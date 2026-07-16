@@ -1,0 +1,17 @@
+# Replit 設定。Secrets（🔒）に GEMINI_KEY / DISCORD_BOT_TOKEN / CREDENTIALS_JSON / YT_TOKEN_B64 等を登録。
+# 無料枠はスリープするため、24h Bot 稼働には Reserved VM / Deployment（有料）が必要。
+run = "python -m server.app"
+entrypoint = "server/app.py"
+modules = ["python-3.12"]
+
+[nix]
+channel = "stable-24_05"
+
+[env]
+TOMATO_HOME = "/tmp/tomato_home"
+TOMATO_UNGATED = "1"
+PORT = "8000"
+
+[deployment]
+run = ["python", "-m", "server.app"]
+deploymentTarget = "cloudrun"
