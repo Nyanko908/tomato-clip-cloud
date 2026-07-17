@@ -242,13 +242,33 @@
     var app = document.querySelector(".app");
     chatUI.setSidebar(!(app && app.classList.contains("sidebar-collapsed")));
   };
+  // スマホ/iPad縦ではサイドバーが本文に重なるので、既定は閉じておく
+  function isNarrow() {
+    return window.matchMedia && window.matchMedia("(max-width:860px)").matches;
+  }
   (function restoreSidebar() {
-    try {
-      if (localStorage.getItem("tc_sidebar_collapsed") === "1") {
-        var app = document.querySelector(".app");
-        if (app) app.classList.add("sidebar-collapsed");
+    var app = document.querySelector(".app");
+    if (!app) return;
+    var collapsed = false;
+    try { collapsed = localStorage.getItem("tc_sidebar_collapsed") === "1"; } catch (e) {}
+    if (isNarrow()) collapsed = true;   // 狭い画面は必ず閉じた状態で開始
+    if (collapsed) app.classList.add("sidebar-collapsed");
+  })();
+  // 背景タップでサイドバーを閉じる（スマホのドロワー）
+  (function bindBackdrop() {
+    var bd = document.getElementById("sidebarBackdrop");
+    if (bd) bd.addEventListener("click", function () { chatUI.setSidebar(true); });
+  })();
+  // 狭い画面でサイドバー内の項目を選んだら自動で閉じる
+  (function autoCloseOnNav() {
+    var sb = document.querySelector(".sidebar");
+    if (!sb) return;
+    sb.addEventListener("click", function (e) {
+      if (!isNarrow()) return;
+      if (e.target && e.target.closest && e.target.closest("button,a")) {
+        chatUI.setSidebar(true);
       }
-    } catch (e) {}
+    });
   })();
 
   // サイドバーの会話履歴リストを描画（各行クリックで復元）
@@ -1119,7 +1139,7 @@
   var EXTRA_I18N_KEYS = ["接続できました", "接続できませんでした", "保存しました", "設定を開く"];
   function collectI18nKeys() {
     var seen = {};
-    ["data-i18n", "data-i18n-ph", "data-i18n-title", "data-i18n-prompt"].forEach(function (attr) {
+    ["data-i18n", "data-i18n-ph", "data-i18n-ph-narrow", "data-i18n-title", "data-i18n-prompt"].forEach(function (attr) {
       var nodes = document.querySelectorAll("[" + attr + "]");
       for (var i = 0; i < nodes.length; i++) seen[nodes[i].getAttribute(attr)] = 1;
     });
@@ -1141,7 +1161,28 @@
     each("data-i18n-ph", function (n, v) { n.placeholder = v; });
     each("data-i18n-title", function (n, v) { n.title = v; n.setAttribute("aria-label", v); });
     each("data-i18n-prompt", function (n, v) { n.dataset.prompt = v; });
+    // 長いプレースホルダーはスマホだと2行に折り返して切れるので、短い方に差し替える
+    each("data-i18n-ph-narrow", function (n, v) {
+      n.dataset.phWide = n.placeholder;   // data-i18n-ph で入った通常版を退避
+      n.dataset.phNarrow = v;
+    });
+    applyNarrowPlaceholder();
   }
+  // 画面幅に応じて placeholder を出し分ける（回転・リサイズにも追従）。
+  // i18n が走らなくても単体で動くよう、未設定なら属性から自分で取る。
+  function applyNarrowPlaceholder() {
+    var narrow = window.matchMedia && window.matchMedia("(max-width:860px)").matches;
+    var nodes = document.querySelectorAll("[data-i18n-ph-narrow]");
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (!n.dataset.phWide) n.dataset.phWide = n.getAttribute("data-i18n-ph") || n.placeholder;
+      if (!n.dataset.phNarrow) n.dataset.phNarrow = n.getAttribute("data-i18n-ph-narrow");
+      var v = narrow ? n.dataset.phNarrow : n.dataset.phWide;
+      if (v) n.placeholder = v;
+    }
+  }
+  window.addEventListener("resize", applyNarrowPlaceholder);
+  applyNarrowPlaceholder();
   // 言語を適用（Pythonにキー一覧を渡して翻訳を取得）
   function applyLang(lang) {
     if (!(window.pywebview && window.pywebview.api && window.pywebview.api.get_strings)) {

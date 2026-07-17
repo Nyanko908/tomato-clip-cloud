@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Tomato Clip</title>
 <style>
   :root{
@@ -21,7 +21,8 @@
     font-family:"Inter",system-ui,-apple-system,"Segoe UI","Yu Gothic UI","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;
     -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;font-size:15px;line-height:1.5;
     overflow:hidden;}
-  .app{display:flex;height:100vh;position:relative;overflow:hidden;}
+  /* iOS Safari の 100vh はアドレスバーを含むため下が切れる。dvh で実表示領域に合わせる */
+  .app{display:flex;height:100vh;height:100dvh;position:relative;overflow:hidden;}
 
   /* Sidebar */
   /* サイドバーは絶対配置。transform で横スライド（GPU合成＝ヌルヌル） */
@@ -350,11 +351,40 @@
   @keyframes cblink{50%{opacity:0;}}
 
   @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;}}
-  @media (max-width:760px){.sidebar{display:none;}}
+  /* ── スマホ / iPad縦：サイドバーは「上に重なるドロワー」にする ──
+     以前は .sidebar{display:none} だけで .main の margin-left が残り、
+     本文が264px右に押し出されて画面外で切れていた（iPhoneで致命的）。 */
+  .sidebar-backdrop{position:absolute;inset:0;z-index:9;background:rgba(0,0,0,.38);
+    opacity:0;pointer-events:none;transition:opacity .3s ease;}
+  @media (max-width:860px){
+    /* 本文は常に全幅（サイドバーは重ねる） */
+    .main{margin-left:0 !important;}
+    /* 影は開いている時だけ（閉じていると画面左端に影が漏れる） */
+    .app:not(.sidebar-collapsed) .sidebar{box-shadow:0 0 40px rgba(0,0,0,.28);}
+    /* サイドバーが開いている時だけ背景を暗くし、タップで閉じられるように */
+    .app:not(.sidebar-collapsed) .sidebar-backdrop{opacity:1;pointer-events:auto;}
+    /* 入力欄は16px未満だと iOS がフォーカス時に勝手にズームする */
+    .field{font-size:16px;}
+    /* iPhone のホームインジケータ / ノッチを避ける */
+    .dock{padding:6px 12px max(12px,env(safe-area-inset-bottom));}
+    .topbar{padding-left:max(16px,env(safe-area-inset-left));
+            padding-right:max(16px,env(safe-area-inset-right));}
+    /* 横幅の狭い端末で余白を詰める */
+    .welcome{padding:16px 12px 6vh;}
+  }
+  /* 極小幅（iPhone SE 等） */
+  @media (max-width:420px){
+    .topbar{height:48px;flex:0 0 48px;}
+    .composer{border-radius:22px;}
+  }
+  /* 横向きで高さが足りない時はウェルカムの余白を削る */
+  @media (max-height:480px){.welcome{padding:8px 12px 12px;}}
 </style>
 </head>
 <body>
 <div class="app">
+  <!-- スマホでサイドバーを開いた時の背景（タップで閉じる） -->
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
   <aside class="sidebar">
     <div class="brand">
       <img class="brand-logo" src="logo.png" alt="" aria-hidden="true">
@@ -426,7 +456,7 @@
     <div class="dock">
       <div class="composer">
         <button class="iconbtn" title="素材を添付" data-i18n-title="素材を添付" aria-label="素材を添付"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
-        <textarea class="field" id="field" rows="1" placeholder="動画をつくる、トレンドを調べる…話しかけてみよう" data-i18n-ph="動画をつくる、トレンドを調べる…話しかけてみよう"></textarea>
+        <textarea class="field" id="field" rows="1" placeholder="動画をつくる、トレンドを調べる…話しかけてみよう" data-i18n-ph="動画をつくる、トレンドを調べる…話しかけてみよう" data-i18n-ph-narrow="話しかけてみよう"></textarea>
         <button class="iconbtn" title="音声で話す" data-i18n-title="音声で話す" aria-label="音声で話す"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
         <button class="send" id="send" title="送信" data-i18n-title="送信" aria-label="送信"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
       </div>
