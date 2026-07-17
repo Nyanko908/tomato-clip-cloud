@@ -49,6 +49,41 @@ async def _heartbeat(port):
         await asyncio.sleep(180)  # 3分ごと
 
 
+async def _keep_alive(port):
+    """
+    24時間稼働：無料枠(Render等)は一定時間アクセスが無いとスリープするので、
+    自分の /healthz を定期的に叩いて起きたままにする。
+    - 間隔は TOMATO_KEEPALIVE_MIN 分（既定10分／Render のスリープは15分無アクセス）
+    - 0 を指定すると無効。ローカル開発では自動で無効。
+    """
+    try:
+        every = int(os.environ.get("TOMATO_KEEPALIVE_MIN", "10"))
+    except ValueError:
+        every = 10
+    if every <= 0:
+        return
+    url = _public_url(port)
+    if "localhost" in url or "127.0.0.1" in url:
+        return  # ローカルではスリープしないので不要
+    target = url.rstrip("/") + "/healthz"
+
+    def _ping():
+        import urllib.request
+        req = urllib.request.Request(target, headers={"User-Agent": "tomato-clip-keepalive"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status
+
+    print(f"[app] 24時間稼働：{every}分ごとに自分を起こします → {target}")
+    while True:
+        await asyncio.sleep(every * 60)
+        try:
+            st = await asyncio.get_running_loop().run_in_executor(None, _ping)
+            if st != 200:
+                print(f"[app] keep-alive: 応答 {st}", file=sys.stderr)
+        except Exception as e:
+            print(f"[app] keep-alive 失敗: {e}", file=sys.stderr)
+
+
 async def _amain():
     import uvicorn
     from server.web import create_app
@@ -69,6 +104,8 @@ async def _amain():
     # 自分のURLをアカウントに登録（heartbeat）→ サイト/アプリが発見できる
     if cloudcfg.is_pro_allowed():
         tasks.append(asyncio.create_task(_heartbeat(port), name="heartbeat"))
+        # 24時間稼働：無料枠のスリープを防ぐ自己ping
+        tasks.append(asyncio.create_task(_keep_alive(port), name="keepalive"))
 
     token = os.environ.get("DISCORD_BOT_TOKEN") or config.get("discord_bot_token", "")
     if token and not cloudcfg.is_pro_allowed():
