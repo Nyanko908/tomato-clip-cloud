@@ -141,6 +141,134 @@
   .card .check{color:var(--tomato);}
 
   /* video card */
+  /* ═══ 動画エディタ：右からスライドイン ═══
+     ヌルっと出すため transform だけを動かす（width/left を動かすと再レイアウトで必ずカクつく）。 */
+  .editor{position:absolute;top:0;right:0;bottom:0;z-index:40;
+    width:calc(100% - 118px);max-width:1600px;
+    background:var(--ground);border-left:1px solid var(--line);
+    box-shadow:-24px 0 60px rgba(20,20,25,.14);
+    display:flex;flex-direction:column;
+    transform:translateX(100%);will-change:transform;
+    transition:transform .42s cubic-bezier(.32,.72,0,1);}
+  .app.editor-open .editor{transform:translateX(0);}
+  .editor[aria-hidden="true"]{pointer-events:none;}
+  .app.editor-open .editor{pointer-events:auto;}
+  /* 背後の会話を少しだけ沈ませる */
+  .ed-scrim{position:absolute;inset:0;z-index:39;background:rgba(0,0,0,.18);
+    opacity:0;pointer-events:none;transition:opacity .42s ease;}
+  .app.editor-open .ed-scrim{opacity:1;pointer-events:auto;}
+
+  .ed-top{flex:0 0 52px;display:flex;align-items:center;gap:8px;padding:0 12px;
+    border-bottom:1px solid var(--line);}
+  .ed-title{font-weight:600;font-size:14px;flex:1;text-align:center;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .ed-top-right{display:flex;align-items:center;gap:6px;}
+  .btn.primary{background:var(--tomato);color:#fff;border:none;border-radius:999px;
+    padding:7px 16px;font-weight:600;font-size:13px;cursor:pointer;}
+  .btn.primary:hover{background:var(--tomato-press);}
+
+  .ed-body{flex:1;display:flex;min-height:0;}
+  /* 左：素材レール */
+  .ed-rail{flex:0 0 300px;border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;}
+  .ed-tabs{display:flex;gap:2px;padding:8px 8px 0;}
+  .ed-tab{flex:1;border:none;background:none;padding:7px 4px 9px;font:inherit;font-size:11.5px;
+    font-weight:700;letter-spacing:.02em;color:var(--faint);cursor:pointer;
+    border-bottom:2px solid transparent;transition:color .12s,border-color .12s;}
+  .ed-tab:hover{color:var(--muted);}
+  .ed-tab.on{color:var(--ink);border-bottom-color:var(--tomato);}
+  .ed-search{display:flex;align-items:center;gap:6px;margin:8px;padding:6px 9px;
+    border:1px solid var(--line);border-radius:9px;color:var(--faint);}
+  .ed-search input{flex:1;border:none;outline:none;background:none;font:inherit;font-size:12.5px;color:var(--ink);}
+  .ed-assets{flex:1;overflow-y:auto;padding:4px 8px 10px;display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(126px,1fr));gap:10px;align-content:start;}
+  .ed-asset{cursor:pointer;}
+  .ed-asset .thumb{position:relative;aspect-ratio:16/9;border-radius:8px;overflow:hidden;background:#000;
+    border:1px solid var(--line);}
+  .ed-asset .thumb video,.ed-asset .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  .ed-asset .dur{position:absolute;right:4px;bottom:4px;background:rgba(0,0,0,.72);color:#fff;
+    font-size:10px;font-weight:600;padding:1px 4px;border-radius:3px;font-variant-numeric:tabular-nums;}
+  .ed-asset .nm{font-size:11.5px;color:var(--muted);margin-top:4px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;}
+  .ed-asset.on .thumb{outline:2px solid var(--tomato);outline-offset:1px;}
+  .ed-empty{grid-column:1/-1;color:var(--faint);font-size:12.5px;text-align:center;padding:22px 6px;}
+
+  /* 右：ビューア */
+  .ed-viewer{flex:1;display:flex;align-items:center;justify-content:center;min-width:0;
+    background:var(--panel);padding:18px;}
+  .ed-stage{position:relative;background:#000;border-radius:6px;overflow:hidden;
+    max-width:100%;max-height:100%;box-shadow:0 10px 40px rgba(0,0,0,.18);}
+  .ed-stage video{display:block;max-width:100%;max-height:100%;}
+  .ed-stage:empty::after,.ed-stage.blank::after{content:"";}
+
+  /* 下：タイムライン */
+  .ed-timeline{flex:0 0 218px;border-top:1px solid var(--line);display:flex;flex-direction:column;
+    background:var(--ground);}
+  .ed-tools{flex:0 0 40px;display:flex;align-items:center;gap:4px;padding:0 10px;
+    border-bottom:1px solid var(--line);}
+  .ed-time{font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink);
+    min-width:64px;text-align:center;}
+  .ed-sep{width:1px;height:18px;background:var(--line);margin:0 4px;}
+  .ed-zoom{margin-left:auto;display:flex;align-items:center;gap:4px;}
+  .ed-zoom input[type=range]{width:96px;accent-color:var(--tomato);}
+  .ed-track-wrap{position:relative;flex:1;overflow-x:auto;overflow-y:hidden;}
+  .ed-ruler{position:relative;height:22px;border-bottom:1px solid var(--line);
+    min-width:100%;background:var(--panel);}
+  .ed-ruler .tick{position:absolute;top:0;bottom:0;border-left:1px solid var(--line);
+    padding-left:4px;font-size:9.5px;color:var(--faint);line-height:22px;
+    font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .ed-tracks{padding:6px 0;display:flex;flex-direction:column;gap:5px;min-width:100%;}
+  .ed-track{display:flex;align-items:stretch;gap:6px;height:54px;}
+  .ed-track-hd{position:sticky;left:0;z-index:3;flex:0 0 42px;display:flex;align-items:center;
+    justify-content:center;background:var(--ground);}
+  .badge{font-size:10px;font-weight:700;color:#fff;border-radius:4px;padding:2px 5px;}
+  .badge.v{background:#3b82f6;} .badge.a{background:#16a34a;}
+  .ed-lane{position:relative;flex:1;background:var(--panel);border-radius:6px;}
+  .ed-clip{position:absolute;top:0;bottom:0;border-radius:6px;overflow:hidden;cursor:grab;
+    border:1px solid rgba(0,0,0,.12);}
+  .ed-clip.v{background:repeating-linear-gradient(90deg,#7cb3f8 0 2px,#9ec8fb 2px 4px);}
+  .ed-clip.a{background:repeating-linear-gradient(90deg,#4ec07a 0 2px,#77d69b 2px 4px);}
+  .ed-clip .cliplbl{position:absolute;left:6px;top:4px;font-size:10.5px;font-weight:600;
+    color:#0b2c53;white-space:nowrap;pointer-events:none;}
+  .ed-playhead{position:absolute;top:0;bottom:0;width:1px;background:var(--tomato);z-index:5;
+    pointer-events:none;left:42px;}
+  .ed-playhead .ph-grip{position:absolute;top:0;left:-5px;width:11px;height:11px;
+    background:var(--tomato);clip-path:polygon(0 0,100% 0,50% 100%);}
+  @media (max-width:860px){
+    .editor{width:100%;}
+    .ed-rail{display:none;}          /* スマホは素材レールを畳んでビューア優先 */
+    .ed-timeline{flex-basis:170px;}
+  }
+
+  /* ── 生成中：スケルトン＋シマー（完成後の .vcard と同じ座組み） ── */
+  .gen{margin-top:2px;}
+  .gen .gen-hd{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;}
+  .gen .gen-step{color:var(--muted);font-size:12.5px;margin:3px 0 10px 24px;white-space:pre-wrap;}
+  /* 3点が回るスパークル（生成中の印） */
+  .gen-spark{width:16px;height:16px;flex:0 0 16px;position:relative;}
+  .gen-spark i{position:absolute;width:4px;height:4px;border-radius:50%;background:var(--tomato);
+    animation:spark-pulse 1.4s ease-in-out infinite;}
+  .gen-spark i:nth-child(1){top:0;left:6px;animation-delay:0s;}
+  .gen-spark i:nth-child(2){bottom:1px;left:0;animation-delay:.25s;}
+  .gen-spark i:nth-child(3){bottom:3px;right:0;animation-delay:.5s;}
+  @keyframes spark-pulse{0%,100%{transform:scale(.6);opacity:.35;}50%{transform:scale(1.15);opacity:1;}}
+  /* 動画が入る予定の場所。9:16（ショート）で場所を先に確保しておく */
+  .gen-canvas{position:relative;width:100%;max-width:340px;aspect-ratio:9/16;max-height:520px;
+    border-radius:16px;overflow:hidden;background:var(--panel);border:1px solid var(--line);}
+  .gen-canvas::after{content:"";position:absolute;inset:0;
+    background:linear-gradient(100deg,transparent 25%,rgba(255,255,255,.85) 50%,transparent 75%);
+    background-size:250% 100%;animation:skel-shimmer 1.9s linear infinite;}
+  @keyframes skel-shimmer{0%{background-position:150% 0;}100%{background-position:-150% 0;}}
+  .gen.done .gen-canvas::after{display:none;}   /* 完了したら光らせない */
+  /* ホバーで左下に小さく出す導線 */
+  .gen-preview{position:absolute;left:10px;bottom:10px;z-index:2;
+    display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border:none;border-radius:999px;
+    background:rgba(29,29,32,.72);color:#fff;font:inherit;font-size:11.5px;font-weight:600;
+    cursor:pointer;opacity:0;transform:translateY(3px);transition:opacity .16s,transform .16s,background .12s;
+    backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);white-space:nowrap;}
+  .gen-canvas:hover .gen-preview,.gen-preview:focus-visible{opacity:1;transform:translateY(0);}
+  .gen-preview:hover{background:rgba(29,29,32,.88);}
+  @media (max-width:860px){.gen-preview{opacity:1;transform:none;}}  /* スマホはホバーが無い */
+
   .vcard{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--ground);box-shadow:var(--shadow);margin-top:6px;max-width:340px;}
   .vcard video{width:100%;display:block;background:#000;max-height:520px;}
   .vcard .meta{padding:12px 14px;}
@@ -625,6 +753,82 @@
       </div>
     </div>
   </main>
+
+  <!-- 動画エディタ：右からスライドインする。会話は左に少し覗いたまま。 -->
+  <div class="ed-scrim" id="edScrim"></div>
+  <aside class="editor" id="editorPanel" aria-hidden="true">
+    <div class="ed-top">
+      <button class="toolbtn ed-home" onclick="chatUI.closeEditor()" data-i18n-title="閉じる" title="閉じる" aria-label="閉じる">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <div class="ed-title" id="edTitle" data-i18n="プレビュー">プレビュー</div>
+      <div class="ed-top-right">
+        <button class="toolbtn" id="edUndo" data-i18n-title="元に戻す" title="元に戻す" aria-label="元に戻す">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7L3 8"/></svg>
+        </button>
+        <button class="toolbtn" id="edRedo" data-i18n-title="やり直す" title="やり直す" aria-label="やり直す">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"/><path d="M21 13a9 9 0 1 1-3-7.7L21 8"/></svg>
+        </button>
+        <button class="btn primary" id="edExport" data-i18n="書き出す">書き出す</button>
+      </div>
+    </div>
+
+    <div class="ed-body">
+      <div class="ed-rail">
+        <div class="ed-tabs">
+          <button class="ed-tab on" data-tab="assets" data-i18n="素材">素材</button>
+          <button class="ed-tab" data-tab="library" data-i18n="ライブラリ">ライブラリ</button>
+          <button class="ed-tab" data-tab="script" data-i18n="台本">台本</button>
+        </div>
+        <div class="ed-search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input type="text" id="edSearch" data-i18n-ph="検索" placeholder="検索">
+        </div>
+        <div class="ed-assets" id="edAssets"></div>
+      </div>
+
+      <div class="ed-viewer">
+        <div class="ed-stage" id="edStage">
+          <video id="edVideo" playsinline preload="metadata"></video>
+        </div>
+      </div>
+    </div>
+
+    <div class="ed-timeline">
+      <div class="ed-tools">
+        <button class="toolbtn" id="edPlay" data-i18n-title="再生 / 一時停止" title="再生 / 一時停止" aria-label="再生 / 一時停止">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <span class="ed-time" id="edTime">00:00.00</span>
+        <span class="ed-sep"></span>
+        <button class="toolbtn" data-i18n-title="カット" title="カット" aria-label="カット">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.12 15.88M14.47 14.48L20 20M8.12 8.12L12 12"/></svg>
+        </button>
+        <button class="toolbtn" data-i18n-title="テロップ" title="テロップ" aria-label="テロップ">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg>
+        </button>
+        <div class="ed-zoom">
+          <button class="toolbtn" id="edZoomOut" aria-label="縮小">−</button>
+          <input type="range" id="edZoom" min="2" max="400" value="120">
+          <button class="toolbtn" id="edZoomIn" aria-label="拡大">＋</button>
+        </div>
+      </div>
+      <div class="ed-track-wrap" id="edTrackWrap">
+        <div class="ed-ruler" id="edRuler"></div>
+        <div class="ed-tracks" id="edTracks">
+          <div class="ed-track">
+            <div class="ed-track-hd"><span class="badge v">V1</span></div>
+            <div class="ed-lane" id="edLaneV"></div>
+          </div>
+          <div class="ed-track">
+            <div class="ed-track-hd"><span class="badge a">A1</span></div>
+            <div class="ed-lane" id="edLaneA"></div>
+          </div>
+        </div>
+        <div class="ed-playhead" id="edPlayhead"><span class="ph-grip"></span></div>
+      </div>
+    </div>
+  </aside>
 </div>
 
 <!-- 設定 / 初回セットアップ / 法的情報 のオーバーレイ -->
