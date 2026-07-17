@@ -129,6 +129,68 @@ def _font(size: int, style: str = None):
 # ════════════════════════════════════════════════════════
 #  自動カット
 # ════════════════════════════════════════════════════════
+class TimeMap:
+    """
+    「元動画の時刻」→「編集後の時刻」の対応表。
+
+    なぜ要るか: カット・早送り・巻き戻し・フリーズは、どれも動画の長さを変える。
+    Gemini が返す秒数はすべて *元動画* を見て決めた値なので、それを
+    変換後のクリップにそのまま渡すと、2つ目以降のエフェクトは必ず別の場所に当たる。
+    （カットで30秒削れば、ズームは30秒ズレる。字幕も同じだけズレる。）
+    変換を1つ適用するたびにここへ登録し、以降の秒数は map() を通してから使う。
+    """
+
+    def __init__(self):
+        self._ops = []
+
+    def add_cuts(self, cuts: list):
+        """[{start,end}] を取り除いた。カット中の時刻はカット開始点に寄せる。"""
+        rs = sorted(((float(c["start"]), float(c["end"])) for c in cuts
+                     if float(c["end"]) > float(c["start"])), key=lambda x: x[0])
+        if not rs:
+            return
+
+        def op(t):
+            shift = 0.0
+            for s, e in rs:
+                if t >= e:
+                    shift += e - s          # まるごと手前で消えた分
+                elif t > s:
+                    return s - shift        # カットされた区間の中 → その入口へ
+            return t - shift
+        self._ops.append(op)
+
+    def add_speed(self, s: float, e: float, speed: float):
+        """[s,e] を speed 倍速にした（この s,e は変換前の時刻）。"""
+        if e <= s or speed <= 0:
+            return
+        span = e - s
+
+        def op(t):
+            if t <= s:
+                return t
+            if t >= e:
+                return t - span + span / speed
+            return s + (t - s) / speed
+        self._ops.append(op)
+
+    def add_insert(self, at: float, dur: float):
+        """at に dur 秒ぶん挿入した（巻き戻し・フリーズ）。"""
+        if dur <= 0:
+            return
+
+        def op(t):
+            return t + dur if t > at else t
+        self._ops.append(op)
+
+    def map(self, t) -> float:
+        """元動画の秒数 → 現在のクリップ上の秒数。"""
+        t = float(t)
+        for op in self._ops:
+            t = op(t)
+        return max(0.0, t)
+
+
 def apply_cuts(video, cut_sections: list, log: LOG_CB):
     """
     cut_sections: [{"start": float, "end": float}]
@@ -620,9 +682,15 @@ def run_edit(video_path: str, analysis: dict,
     log("[1/7] 動画読み込み...")
     raw = VideoFileClip(video_path)
 
+    # analysis の秒数はすべて「元動画」基準。各変換で尺が変わるので、
+    # 使う直前に tmap.map() で現在のクリップ上の秒数へ直す。
+    tmap = TimeMap()
+
     # カット
     log("[2/7] 自動カット...")
-    cut = apply_cuts(raw, analysis.get("cut_sections", []), log)
+    cuts = analysis.get("cut_sections", [])
+    cut = apply_cuts(raw, cuts, log)
+    tmap.add_cuts(cuts)
 
     # 巻き戻し・フリーズエフェクト
     rewind_at = analysis.get("rewind_at")
@@ -631,33 +699,39 @@ def run_edit(video_path: str, analysis: dict,
     ff_at  = analysis.get("fastforward_at")
     ff_end = analysis.get("fastforward_end")
     if fastforward_enabled and ff_at is not None and ff_end is not None:
-        cut = apply_fastforward(cut, float(ff_at), float(ff_end),
-                                fastforward_speed, log=log)
+        s, e = tmap.map(ff_at), tmap.map(ff_end)
+        cut = apply_fastforward(cut, s, e, fastforward_speed, log=log)
+        tmap.add_speed(s, e, fastforward_speed)
     if rewind_enabled and rewind_at is not None:
-        cut = apply_rewind(cut, float(rewind_at), log=log)
+        t = tmap.map(rewind_at)
+        cut = apply_rewind(cut, t, log=log)
+        tmap.add_insert(t - 1.5, 1.5)      # apply_rewind の既定 rewind_dur
     if freeze_enabled and freeze_at is not None:
-        cut = apply_freeze(cut, float(freeze_at), freeze_dur, log=log)
+        t = tmap.map(freeze_at)
+        cut = apply_freeze(cut, t, freeze_dur, log=log)
+        tmap.add_insert(t, freeze_dur)
 
+    # 以下は尺を変えないので、写像に足す必要はない（時刻の変換だけ）
     zoom_at    = analysis.get("zoom_at")
     zoom_end   = analysis.get("zoom_end")
     zoom_scale = float(analysis.get("zoom_scale", 1.5))
     if zoom_enabled and zoom_at is not None and zoom_end is not None:
-        cut = apply_zoom(cut, float(zoom_at), float(zoom_end), zoom_scale, log=log)
+        cut = apply_zoom(cut, tmap.map(zoom_at), tmap.map(zoom_end), zoom_scale, log=log)
 
     mono_at  = analysis.get("monochrome_at")
     mono_end = analysis.get("monochrome_end")
     if monochrome_enabled and mono_at is not None and mono_end is not None:
-        cut = apply_monochrome(cut, float(mono_at), float(mono_end), log=log)
+        cut = apply_monochrome(cut, tmap.map(mono_at), tmap.map(mono_end), log=log)
 
     flip_at  = analysis.get("flip_at")
     flip_end = analysis.get("flip_end")
     if flip_enabled and flip_at is not None and flip_end is not None:
-        cut = apply_flip(cut, float(flip_at), float(flip_end), log=log)
+        cut = apply_flip(cut, tmap.map(flip_at), tmap.map(flip_end), log=log)
 
     mosaic_at  = analysis.get("mosaic_at")
     mosaic_end = analysis.get("mosaic_end")
     if mosaic_enabled and mosaic_at is not None and mosaic_end is not None:
-        cut = apply_mosaic(cut, float(mosaic_at), float(mosaic_end), log=log)
+        cut = apply_mosaic(cut, tmap.map(mosaic_at), tmap.map(mosaic_end), log=log)
 
     if extend_target > 0:
         cut = apply_duration_extend(cut, extend_target, extend_method, log=log)
@@ -709,11 +783,15 @@ def run_edit(video_path: str, analysis: dict,
     # 字幕
     caption_times = []
     for cap in analysis.get("captions", []):
-        s = float(cap.get("start", 0))
-        e = float(cap.get("end",   0))
         t = cap.get("text", "")
         fny = cap.get("funny", False)
-        if not t or e <= s:
+        if not t or float(cap.get("end", 0)) <= float(cap.get("start", 0)):
+            continue
+        # 字幕の秒数も元動画基準。カット・早送り等でズレた分をここで吸収する
+        # （以前は生の値をそのまま置いていたので、カットした分だけ字幕がズレていた）
+        s = tmap.map(cap.get("start", 0))
+        e = tmap.map(cap.get("end", 0))
+        if e <= s:
             continue
         s = min(s, max(0.0, dur - 0.1))
         e = min(e, dur)

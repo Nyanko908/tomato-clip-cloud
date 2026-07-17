@@ -947,7 +947,9 @@ def analyze_video(model, video_path: str, log: LOG_CB, gemini_rot=None, chat_con
 
 注意:
 - cut_sections は無音・動きのない区間・冗長なシーンのみ（短すぎる動画はカットしない）
-- captions はカット後の動画に対応したタイムスタンプで
+- 【重要】すべての秒数（captions・cut_sections・各エフェクト）は、いま見せている
+  動画のタイムラインそのままで答えてください。カットや早送りを引き算しないこと。
+  編集後のズレはこちらで補正します。
 - funny=true のシーンには、その言語らしいリアクション表現を追加
 """ + "\n" + _LANG_STYLE.get(output_lang, _LANG_STYLE["ja"])
 
