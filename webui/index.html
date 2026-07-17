@@ -103,6 +103,24 @@
   .ai-avatar{width:26px;height:26px;flex:0 0 26px;margin-top:2px;object-fit:contain;}
   .ai-body{flex:1;min-width:0;}
   .ai-body .txt{white-space:pre-wrap;}
+  /* 🍅 THINKING… ：トマトのロゴ（AI_AVATAR）の隣で文字が明滅し、点が順に跳ねる */
+  .thinking-txt{display:flex;align-items:center;gap:1px;font-weight:700;letter-spacing:.12em;font-size:13px;}
+  .think-word{background:linear-gradient(90deg,var(--faint) 20%,var(--tomato) 50%,var(--faint) 80%);
+    background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;
+    animation:think-shimmer 1.8s linear infinite;}
+  .think-dots i{font-style:normal;color:var(--tomato);display:inline-block;animation:think-bounce 1.2s infinite;}
+  .think-dots i:nth-child(2){animation-delay:.15s;} .think-dots i:nth-child(3){animation-delay:.3s;}
+  @keyframes think-shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+  @keyframes think-bounce{0%,60%,100%{transform:translateY(0);opacity:.45;}30%{transform:translateY(-3px);opacity:1;}}
+  /* AI発話のアクションバー（👍👎 再生成 共有 コピー）：ホバーで出す */
+  .msg.ai .acts{display:flex;gap:2px;margin-top:6px;opacity:0;transition:opacity .15s;}
+  .msg.ai:hover .acts,.msg.ai .acts:focus-within,.msg.ai .acts.on{opacity:1;}
+  .actbtn{width:30px;height:30px;border:none;border-radius:8px;background:none;color:var(--muted);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .12s,color .12s;}
+  .actbtn:hover{background:var(--hover);color:var(--ink);}
+  .actbtn.active{color:var(--tomato);}
+  .actbtn.ok{color:#16a34a;}
+  @media (max-width:860px){.msg.ai .acts{opacity:1;}}  /* スマホはホバーが無いので常時表示 */
   .ai-body .txt.md{white-space:normal;}
   .ai-body .txt a{color:var(--tomato);}
   .ai-body .md-p{white-space:normal;}
@@ -294,18 +312,35 @@
   .sched-grid th.today{color:var(--tomato);}
   .sched-grid th .th-d{font-size:16px;font-weight:700;color:var(--ink);}
   .sched-grid th.today .th-d{color:var(--tomato);}
-  .sched-grid td{border:1px solid var(--line);height:52px;vertical-align:top;padding:3px;
+  .sched-grid td{border:1px solid var(--line);height:52px;min-width:96px;vertical-align:top;padding:3px;
     transition:background .1s;}
   .sched-grid td.timecol{border:none;font-size:11px;color:var(--faint);text-align:right;
     padding-right:8px;width:52px;vertical-align:middle;}
   .sched-grid td.past{background:repeating-linear-gradient(45deg,transparent,transparent 5px,var(--panel) 5px,var(--panel) 6px);}
   .sched-grid td.dragover{background:var(--tomato-tint);outline:2px dashed var(--tomato);outline-offset:-3px;}
-  .scard{display:flex;align-items:center;gap:5px;background:var(--tomato);color:#fff;border-radius:8px;
-    padding:4px 6px;font-size:11.5px;font-weight:600;cursor:grab;margin-bottom:3px;line-height:1.2;}
+  /* 予約カード＝書いたプロンプトそのもの。時刻＋文章を出す */
+  /* 文章が主役なので、切り詰めすぎず2行まで見せる */
+  .scard{display:grid;grid-template-columns:auto 1fr auto;align-items:start;gap:2px 5px;
+    background:var(--tomato);color:#fff;border-radius:8px;
+    padding:4px 6px;font-size:11.5px;font-weight:600;cursor:grab;margin-bottom:3px;line-height:1.3;
+    overflow:hidden;}
+  .scard .sc-time{opacity:.85;font-variant-numeric:tabular-nums;font-size:10.5px;}
+  .scard .sc-p{grid-column:1/-1;font-weight:500;white-space:normal;word-break:break-word;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
   .scard.rep{background:linear-gradient(135deg,#e5503c,#f6883c);}
   .scard:active{cursor:grabbing;}
-  .scard .x{margin-left:auto;cursor:pointer;opacity:.85;font-size:12px;padding:0 2px;}
+  .scard .x{flex:0 0 auto;margin-left:auto;cursor:pointer;opacity:.85;font-size:12px;padding:0 2px;}
   .scard .x:hover{opacity:1;}
+  /* 空きセルは「書ける」ことが分かるように、ホバーで + を出す */
+  .sched-grid td[data-col]:not(.past):hover{background:var(--tomato-tint);cursor:text;}
+  .sched-grid td[data-col]:not(.past):empty:hover::after{content:"+";color:var(--tomato);
+    display:flex;align-items:center;justify-content:center;height:100%;font-size:16px;font-weight:600;opacity:.7;}
+  /* その場に出るプロンプト入力欄 */
+  .sc-edit{position:relative;z-index:5;}
+  .sc-edit textarea{width:100%;border:2px solid var(--tomato);border-radius:8px;padding:5px 6px;
+    font:inherit;font-size:11.5px;line-height:1.3;resize:none;outline:none;background:var(--ground);
+    color:var(--ink);box-shadow:0 6px 20px rgba(0,0,0,.16);}
+  .sc-edit textarea::placeholder{color:var(--faint);}
   .sched-empty-note{color:var(--faint);font-size:12.5px;padding:10px 4px;}
 
   /* クラウド セットアップ（イントロ → 起動） */
@@ -535,10 +570,10 @@
           <button class="toolbtn" onclick="chatUI.closeSchedule()" aria-label="閉じる" data-i18n-title="閉じる" title="閉じる">✕</button>
         </div>
         <div class="sched-palette">
-          <span class="sched-hint" data-i18n="ドラッグしてカレンダーに置くと予約できます：">ドラッグしてカレンダーに置くと予約できます：</span>
-          <div class="pchip" draggable="true" data-count="1">🎬 <span data-i18n="動画1本">動画1本</span></div>
-          <div class="pchip" draggable="true" data-count="3">🎬 <span data-i18n="3本">3本</span></div>
-          <div class="pchip" draggable="true" data-count="5">🎬 <span data-i18n="5本">5本</span></div>
+          <span class="sched-hint" data-i18n="時間をクリックして、話しかけるように書くだけ。ドラッグでも置けます：">時間をクリックして、話しかけるように書くだけ。ドラッグでも置けます：</span>
+          <div class="pchip" draggable="true" data-prompt="ショート動画をつくって">🎬 <span data-i18n="ショートをつくる">ショートをつくる</span></div>
+          <div class="pchip" draggable="true" data-prompt="トレンド検索">📈 <span data-i18n="トレンド検索">トレンド検索</span></div>
+          <div class="pchip" draggable="true" data-prompt="チャンネルの分析をして">📊 <span data-i18n="分析する">分析する</span></div>
         </div>
         <div class="sched-grid-wrap">
           <table class="sched-grid" id="schedGrid"></table>

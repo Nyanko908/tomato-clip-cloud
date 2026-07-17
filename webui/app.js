@@ -69,6 +69,90 @@
     }
   }
 
+  // ---- AI発話のアクションバー：👍 👎 再生成 共有 コピー ----
+  var _ICON = {
+    up:   '<path d="M7 22V11l5-9a2 2 0 0 1 2 2v5h5.5a2 2 0 0 1 2 2.4l-1.6 8A2 2 0 0 1 18 22H7z"/><path d="M7 11H4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3"/>',
+    down: '<path d="M17 2v11l-5 9a2 2 0 0 1-2-2v-5H4.5a2 2 0 0 1-2-2.4l1.6-8A2 2 0 0 1 6 2h11z"/><path d="M17 13h3a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1h-3"/>',
+    redo: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/>',
+    share:'<path d="M12 16V3"/><path d="M8 7l4-4 4 4"/><path d="M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/>',
+    copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  };
+  function _act(name, title, icon) {
+    return '<button class="actbtn" data-act="' + name + '" title="' + title + '" aria-label="' + title + '"' +
+      ' data-i18n-title="' + title + '"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" ' +
+      'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + icon + "</svg></button>";
+  }
+  var ACTS_HTML = '<div class="acts">' +
+    _act("up", "良い回答", _ICON.up) + _act("down", "良くない回答", _ICON.down) +
+    _act("redo", "再生成", _ICON.redo) + _act("share", "共有", _ICON.share) +
+    _act("copy", "コピー", _ICON.copy) + "</div>";
+
+  // ボタンを一瞬チェックにして「効いた」ことを伝える
+  function _flash(btn) {
+    var old = btn.innerHTML;
+    btn.classList.add("ok");
+    btn.innerHTML = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+    setTimeout(function () { btn.classList.remove("ok"); btn.innerHTML = old; }, 1200);
+  }
+  function _msgText(msg) {
+    var t = msg.querySelector(".ai-body .txt");
+    return t ? (t.innerText || t.textContent || "").trim() : "";
+  }
+  function wireActs(msg) {
+    var bar = msg.querySelector(".acts");
+    if (!bar || bar._wired) return;
+    bar._wired = true;
+    bar.addEventListener("click", function (e) {
+      var btn = e.target.closest && e.target.closest(".actbtn");
+      if (!btn) return;
+      var act = btn.getAttribute("data-act");
+      if (act === "copy") {
+        _copy(_msgText(msg)); _flash(btn);
+      } else if (act === "share") {
+        var text = _msgText(msg);
+        if (navigator.share) { navigator.share({ text: text }).catch(function () {}); }
+        else { _copy(text); _flash(btn); }   // 共有APIが無い環境（デスクトップ）はコピーで代替
+      } else if (act === "redo") {
+        _regenerate(msg);
+      } else if (act === "up" || act === "down") {
+        // 👍/👎 は排他。もう一度押すと取り消し
+        var other = bar.querySelector('[data-act="' + (act === "up" ? "down" : "up") + '"]');
+        if (other) other.classList.remove("active");
+        btn.classList.toggle("active");
+        _feedback(act, _msgText(msg), btn.classList.contains("active"));
+      }
+    });
+  }
+  function _copy(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    } catch (e) {}
+    var ta = document.createElement("textarea");   // 古い/非セキュアな環境向けフォールバック
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+  function _feedback(kind, text, on) {
+    var a = api();
+    if (a && a.rate_message) { try { a.rate_message(kind, text, !!on); } catch (e) {} }
+  }
+  // 直前の自分の発話をもう一度送る＝作り直し（発話バブルは増やさない）
+  function _regenerate(msg) {
+    var prev = msg, userText = null;
+    while ((prev = prev.previousElementSibling)) {
+      if (prev.classList.contains("user")) {
+        var b = prev.querySelector(".bubble");
+        userText = b ? (b.innerText || b.textContent || "").trim() : null;
+        break;
+      }
+    }
+    if (!userText) return;
+    msg.remove();                        // 古い回答を消してから作り直す
+    chatUI.sendText(userText, true);     // true = ユーザー吹き出しは出さない
+  }
+
   // ---- render helpers (Pythonからも呼ばれる) ----
   var chatUI = {
     addUser: function (text) {
@@ -90,8 +174,10 @@
       }
       var d = document.createElement("div");
       d.className = "msg ai";
-      d.innerHTML = AI_AVATAR + '<div class="ai-body"><div class="txt md">' + mdToHtml(text) + "</div></div>";
+      d.innerHTML = AI_AVATAR + '<div class="ai-body"><div class="txt md">' + mdToHtml(text) +
+        "</div>" + ACTS_HTML + "</div>";
       el.thread.appendChild(d);
+      wireActs(d);
       scrollBottom();
     },
 
@@ -102,7 +188,8 @@
         ensureThread();
         var d = document.createElement("div");
         d.id = "thinking"; d.className = "msg ai";
-        d.innerHTML = AI_AVATAR + '<div class="ai-body"><div class="txt" style="color:var(--faint)">考え中<span class="spinner" style="display:inline-block;vertical-align:-2px;margin-left:6px"></span></div></div>';
+        d.innerHTML = AI_AVATAR + '<div class="ai-body"><div class="txt thinking-txt">' +
+          '<span class="think-word">THINKING</span><span class="think-dots"><i>.</i><i>.</i><i>.</i></span></div></div>';
         el.thread.appendChild(d); scrollBottom();
       } else if (ex) { ex.remove(); }
     },
@@ -578,9 +665,14 @@
         cellDate.setHours(HOURS[r], 0, 0, 0);
         var isPast = cellDate.getTime() < now.getTime() - 60000;
         var cards = (byCell[c + "_" + r] || []).map(function (t) {
-          var rep = t.repeat ? ' rep" title="' + (t.repeat === "daily" ? "毎日" : "毎週") + '"' : '"';
-          return '<div class="scard' + (t.repeat ? " rep" : "") + '" draggable="true" data-tid="' + t.id + '">' +
-            "🎬" + esc(String(t.count)) + (t.repeat ? "🔁" : "") +
+          // スケジュール＝プロンプト。書いた文章そのものをカードに出す
+          var p = t.prompt || "";
+          var mm = new Date(t.run_at);
+          var hhmm = isNaN(mm) ? "" : pad2(mm.getHours()) + ":" + pad2(mm.getMinutes());
+          return '<div class="scard' + (t.repeat ? " rep" : "") + '" draggable="true" data-tid="' + t.id + '"' +
+            ' title="' + esc(hhmm + "  " + p) + '">' +
+            '<span class="sc-time">' + hhmm + (t.repeat ? " 🔁" : "") + "</span>" +
+            '<span class="sc-p">' + esc(p) + "</span>" +
             '<span class="x" data-cancel="' + t.id + '">✕</span></div>';
         }).join("");
         body += '<td class="' + (isPast ? "past" : "") + '" data-col="' + c + '" data-row="' + r + '">' + cards + "</td>";
@@ -598,7 +690,7 @@
     return dt;
   }
 
-  var _dragCount = null, _dragTaskId = null;
+  var _dragPrompt = null, _dragTaskId = null;
   function wirePalette() {
     var chips = document.querySelectorAll("#schedulePanel .pchip");
     for (var i = 0; i < chips.length; i++) {
@@ -606,11 +698,53 @@
       if (ch._wired) continue;
       ch._wired = true;
       ch.addEventListener("dragstart", function (e) {
-        _dragCount = parseInt(this.getAttribute("data-count"), 10) || 1;
+        _dragPrompt = this.getAttribute("data-prompt") || "";
         _dragTaskId = null;
         try { e.dataTransfer.setData("text/plain", "chip"); e.dataTransfer.effectAllowed = "copy"; } catch (x) {}
       });
     }
+  }
+
+  // ── 革命の中心：セルに直接プロンプトを書く ──
+  // 空きセルをクリック → その場に入力欄。Enter で予約、Esc で取り消し。
+  function openSlotEditor(td, opts) {
+    opts = opts || {};
+    if (td.querySelector(".sc-edit")) return;
+    var col = parseInt(td.getAttribute("data-col"), 10);
+    var row = parseInt(td.getAttribute("data-row"), 10);
+    var box = document.createElement("div");
+    box.className = "sc-edit";
+    box.innerHTML = '<textarea rows="2" placeholder="' + esc(chatUI.t("話しかけるように書く…")) + '"></textarea>';
+    td.appendChild(box);
+    var ta = box.querySelector("textarea");
+    ta.value = opts.value || "";
+    ta.focus();
+    ta.select && ta.select();
+
+    var closed = false;
+    function close() { if (!closed) { closed = true; box.remove(); } }
+    function save() {
+      var text = ta.value.trim();
+      if (!text) { close(); return; }
+      var a = api(); if (!a) { close(); return; }
+      var after = function (list) {
+        try { list = typeof list === "string" ? JSON.parse(list) : list; } catch (er) {}
+        if (list && !list.error) { _schedTasks = list; renderWeek(); }
+        else if (list && list.error) { close(); }
+      };
+      if (opts.taskId != null && a.update_schedule_prompt) {
+        a.update_schedule_prompt(opts.taskId, text).then(after);
+      } else if (a.add_schedule) {
+        a.add_schedule(localISO(cellDateTime(col, row)), text, null).then(after);
+      }
+      close();
+    }
+    ta.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); save(); }   // Shift+Enter で改行
+      else if (e.key === "Escape") { e.preventDefault(); close(); }
+    });
+    ta.addEventListener("blur", save);   // 外をクリックしても保存
+    box.addEventListener("click", function (e) { e.stopPropagation(); });
   }
   function wireGridDnD() {
     var grid = document.getElementById("schedGrid");
@@ -619,9 +753,18 @@
     grid.querySelectorAll(".scard").forEach(function (card) {
       card.addEventListener("dragstart", function (e) {
         _dragTaskId = parseInt(this.getAttribute("data-tid"), 10);
-        _dragCount = null;
+        _dragPrompt = null;
         try { e.dataTransfer.setData("text/plain", "card"); e.dataTransfer.effectAllowed = "move"; } catch (x) {}
         e.stopPropagation();
+      });
+      // カードをクリック → 文章を書き直す
+      card.addEventListener("click", function (e) {
+        if (e.target.hasAttribute("data-cancel")) return;   // ✕ は削除
+        e.stopPropagation();
+        var tid = parseInt(this.getAttribute("data-tid"), 10);
+        var t = null;
+        for (var i = 0; i < _schedTasks.length; i++) if (_schedTasks[i].id === tid) t = _schedTasks[i];
+        openSlotEditor(this.parentNode, { value: t ? t.prompt : "", taskId: tid });
       });
     });
     grid.querySelectorAll("[data-cancel]").forEach(function (x) {
@@ -641,6 +784,12 @@
         e.preventDefault(); td.classList.add("dragover");
       });
       td.addEventListener("dragleave", function () { td.classList.remove("dragover"); });
+      // 空きセルをクリック → その場でプロンプトを書く
+      td.addEventListener("click", function (e) {
+        if (td.classList.contains("past")) return;
+        if (e.target.closest && e.target.closest(".scard")) return;   // カードは編集扱い
+        openSlotEditor(td);
+      });
       td.addEventListener("drop", function (e) {
         e.preventDefault(); td.classList.remove("dragover");
         if (td.classList.contains("past")) return;
@@ -654,10 +803,11 @@
         };
         if (_dragTaskId != null && a.reschedule) {
           a.reschedule(_dragTaskId, iso).then(after);
-        } else if (_dragCount != null && a.add_schedule) {
-          a.add_schedule(iso, _dragCount, null).then(after);
+        } else if (_dragPrompt != null) {
+          // チップを置いた時は、そのまま確定せず文章を直せる状態で開く
+          openSlotEditor(td, { value: _dragPrompt });
         }
-        _dragCount = null; _dragTaskId = null;
+        _dragPrompt = null; _dragTaskId = null;
       });
     });
   }
@@ -1088,9 +1238,15 @@
   function doSend() {
     var text = el.field.value.trim();
     if (!text || busy) return;
-    chatUI.addUser(text);
-    chatUI._firstTitleSet = true;
     el.field.value = ""; autogrow();
+    chatUI.sendText(text);
+  }
+  // 任意のテキストを送る共通経路（入力欄・再生成の両方から使う）。
+  // skipUserBubble=true なら発話バブルを足さない（再生成用）。
+  chatUI.sendText = function (text, skipUserBubble) {
+    if (!text || busy) return;
+    if (!skipUserBubble) chatUI.addUser(text);
+    chatUI._firstTitleSet = true;
     setBusy(true);
     chatUI.thinking(true);
     // send_message は即 {cid} を返す。実処理はPython側スレッドで走り、
@@ -1103,7 +1259,7 @@
       if (r && r.cid) chatUI._activeCid = r.cid;
       chatUI.refreshConvs();   // 新規会話をサイドバーに反映
     }).catch(function (e) { chatUI.addError(String(e)); setBusy(false); });
-  }
+  };
   // Pythonが処理完了時に呼ぶ（生成など長い処理の後の入力解放）
   chatUI.done = function () { setBusy(false); chatUI.thinking(false); chatUI.refreshConvs(); chatUI.refreshAccount(); };
 
@@ -1136,7 +1292,8 @@
   // data-i18n(本文) / data-i18n-ph(placeholder) / data-i18n-title(title+aria) /
   // data-i18n-prompt(チップ送信文) を持つ全要素の「日本語原文」を集める。
   // DOM属性に無い動的メッセージ用のキーも翻訳マップに載せる
-  var EXTRA_I18N_KEYS = ["接続できました", "接続できませんでした", "保存しました", "設定を開く"];
+  var EXTRA_I18N_KEYS = ["接続できました", "接続できませんでした", "保存しました", "設定を開く",
+    "話しかけるように書く…"];
   function collectI18nKeys() {
     var seen = {};
     ["data-i18n", "data-i18n-ph", "data-i18n-ph-narrow", "data-i18n-title", "data-i18n-prompt"].forEach(function (attr) {

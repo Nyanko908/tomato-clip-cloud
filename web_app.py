@@ -503,9 +503,10 @@ class Api:
                 out.append({
                     "id": t.get("id"),
                     "run_at": t.get("run_at", ""),
+                    "prompt": self._task_prompt(t),
                     "count": (t.get("params") or {}).get("count", 1),
                     "repeat": t.get("repeat"),
-                    "type": t.get("type", "pipeline_batch"),
+                    "type": t.get("type", "prompt"),
                     "created_at": t.get("created_at", ""),
                 })
             out.sort(key=lambda x: x.get("run_at", ""))
@@ -513,14 +514,46 @@ class Api:
         except Exception:
             return []
 
-    def add_schedule(self, run_at_iso, count=1, repeat=None):
-        """指定時刻に「動画をN本つくる」予約を登録し、更新後の一覧を返す。"""
+    @staticmethod
+    def _task_prompt(t) -> str:
+        """タスクから実行するプロンプトを取り出す。旧 pipeline_batch は文章に変換。"""
+        params = t.get("params") or {}
+        p = (params.get("prompt") or "").strip()
+        if p:
+            return p
+        return f"動画を{params.get('count', 1)}本つくって"   # 旧タスク互換
+
+    def add_schedule(self, run_at_iso, prompt="", repeat=None):
+        """
+        指定時刻に「このプロンプトを送る」予約を登録する。
+        スケジュール＝チャットに打つのと同じ文章。何をするかは AI が解釈する。
+        """
         try:
             import schedule_engine
-            count = max(1, int(count or 1))
+            prompt = (prompt or "").strip()
+            if not prompt:
+                return {"error": "プロンプトが空です"}
             rep = repeat if repeat in ("daily", "weekly") else None
-            schedule_engine.add_task("pipeline_batch", run_at_iso, {"count": count}, repeat=rep)
+            schedule_engine.add_task("prompt", run_at_iso, {"prompt": prompt}, repeat=rep)
             self._ensure_schedule_watcher()
+        except Exception as e:
+            return {"error": str(e)}
+        return self.list_schedule()
+
+    def update_schedule_prompt(self, task_id, prompt):
+        """予約のプロンプトだけ書き換える（時刻・繰り返しは維持）。"""
+        try:
+            import schedule_engine
+            prompt = (prompt or "").strip()
+            if not prompt:
+                return {"error": "プロンプトが空です"}
+            tasks = schedule_engine.load_tasks()
+            for t in tasks:
+                if t.get("id") == task_id:
+                    t.setdefault("params", {})["prompt"] = prompt
+                    t["type"] = "prompt"
+                    break
+            schedule_engine._write(tasks)
         except Exception as e:
             return {"error": str(e)}
         return self.list_schedule()
@@ -560,11 +593,12 @@ class Api:
                     import schedule_engine
                     for task in schedule_engine.get_pending():
                         schedule_engine.mark_done(task["id"])
-                        count = (task.get("params") or {}).get("count", 1)
-                        self._js("addAiText", f"⏰ スケジュール実行！ 動画を {count} 本つくります。")
-                        # 既存の生成経路（function-call）に乗せる
+                        # スケジュール＝プロンプト。自分で打ったのと同じ経路に流す
+                        prompt = self._task_prompt(task)
                         try:
-                            self.engine.send(f"動画を{count}本つくって")
+                            self._js("addUser", prompt)     # ユーザー発話として表示
+                            self._js("thinking", True)      # 🍅 THINKING…
+                            self.send_message(prompt)       # 会話に記録＋生成（別スレッド）
                         except Exception:
                             pass
                 except Exception:
