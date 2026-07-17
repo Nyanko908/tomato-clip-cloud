@@ -423,6 +423,33 @@ def _get_ffmpeg_exe() -> Optional[str]:
         return None
 
 
+def _ffmpeg_dir_for_ytdlp() -> Optional[str]:
+    """
+    yt-dlp に渡せる ffmpeg のディレクトリを返す。
+
+    imageio_ffmpeg の実体は "ffmpeg-win-x86_64-v7.1.exe" のような名前で、
+    yt-dlp は "ffmpeg(.exe)" という名前しか認識しない。そのままでは
+    区間DL(download_ranges)が「ffmpeg is not installed」で失敗する。
+    正しい名前の複製を一度だけ作り、そのディレクトリを渡す。
+    """
+    exe = _get_ffmpeg_exe()
+    if not exe:
+        return None
+    src = Path(exe)
+    if src.stem == "ffmpeg":
+        return str(src.parent)
+    import tempfile, shutil
+    d = Path(tempfile.gettempdir()) / "tomato_ffmpeg"
+    dst = d / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    try:
+        if not dst.exists() or dst.stat().st_size != src.stat().st_size:
+            d.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        return str(d)
+    except Exception:
+        return None
+
+
 def probe_rotation(path: str) -> int:
     """
     動画の回転メタデータ（度）を返す。無ければ 0。
@@ -447,6 +474,41 @@ def probe_rotation(path: str) -> int:
     except Exception:
         pass
     return 0
+
+
+# これより長い動画は「見せ場を選んでから切る」。
+# 元々ショートだけを対象にしていた頃はDLしてから丸ごと解析していたが、
+# 長尺（配信アーカイブ＝原典）は丸ごと解析できない：
+# 2時間 = 7200秒 x 300トークン/秒 = 216万トークンでコンテキスト上限を超える。
+_LONG_VIDEO_SEC = 180
+_CLIP_SEC = 60
+
+
+def pick_highlight_segment(video_id: str, model, config: dict, log: LOG_CB):
+    """
+    長尺動画なら (start, end) を返す。短い動画・材料が無い動画は None
+    （＝従来どおり全体をDLして解析する）。
+    """
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    try:
+        import highlights
+        info = highlights.fetch_video_meta(url, log)
+        dur = float(info.get("duration") or 0)
+        if dur and dur <= _LONG_VIDEO_SEC:
+            return None                     # 短い動画はそのまま扱える
+        if not dur:
+            return None
+        log(f"🔎 長さ {int(dur)//60}分 の動画 → 見せ場を探します")
+        hs = highlights.find_highlights(
+            url, model, log=log, want=1, clip_sec=_CLIP_SEC,
+            lang=config.get("output_language", "ja"))
+        if not hs:
+            log("⚠️ 見せ場を特定できませんでした → 冒頭から切り出します")
+            return (0.0, min(dur, _CLIP_SEC))
+        return (hs[0]["start"], hs[0]["end"])
+    except Exception as e:
+        log(f"⚠️ 見せ場の検出に失敗（全体をDLします）: {e}")
+        return None
 
 
 def normalize_video(path: str, log: LOG_CB) -> str:
@@ -489,10 +551,10 @@ def normalize_video(path: str, log: LOG_CB) -> str:
         return path
 
 
-def download_video(video_id: str, out_dir: str, log: LOG_CB) -> Optional[str]:
-    url      = f"https://www.youtube.com/shorts/{video_id}"
+def download_video(video_id: str, out_dir: str, log: LOG_CB,
+                   start: float = None, end: float = None) -> Optional[str]:
+    url      = f"https://www.youtube.com/watch?v={video_id}"   # 長尺・ショート両対応
     out_tmpl = str(Path(out_dir) / f"{video_id}.%(ext)s")
-    log(f"⬇️  ダウンロード中: {url}")
 
     ffmpeg_exe = _get_ffmpeg_exe()
     opts = {
@@ -502,8 +564,35 @@ def download_video(video_id: str, out_dir: str, log: LOG_CB) -> Optional[str]:
         "no_warnings": True,
         "merge_output_format": "mp4",
     }
-    if ffmpeg_exe:
+    # yt-dlp に ffmpeg の場所を教える（区間DLに必須）。
+    # opts["ffmpeg_location"] だけでは足りない：区間DLの可否を決める
+    # FFmpegFD.available() は引数なしのクラスメソッドで、渡した opts を
+    # 見ずに FFmpegPostProcessor._ffmpeg_location（ContextVar）だけを見る。
+    # そこへ入れておかないと「ffmpeg is not installed」で弾かれる。
+    ff_dir = _ffmpeg_dir_for_ytdlp()
+    if ff_dir:
+        opts["ffmpeg_location"] = ff_dir
+        try:
+            from yt_dlp.postprocessor.ffmpeg import FFmpegPostProcessor
+            FFmpegPostProcessor._ffmpeg_location.set(ff_dir)
+        except Exception:
+            pass
+    elif ffmpeg_exe:
         opts["ffmpeg_location"] = ffmpeg_exe
+    # 区間指定。長尺の原典から見せ場だけを落とすために使う
+    # （2時間の配信を丸ごと落とさずに済む）。
+    if start is not None and end is not None and end > start:
+        try:
+            from yt_dlp.utils import download_range_func
+            opts["download_ranges"] = download_range_func(None, [(float(start), float(end))])
+            opts["force_keyframes_at_cuts"] = True
+            log(f"⬇️  ダウンロード中（{int(start)//60:02d}:{int(start)%60:02d}"
+                f"–{int(end)//60:02d}:{int(end)%60:02d} の区間のみ）: {url}")
+        except Exception as e:
+            log(f"⚠️ 区間指定に失敗、全体をDLします: {e}")
+            log(f"⬇️  ダウンロード中: {url}")
+    else:
+        log(f"⬇️  ダウンロード中: {url}")
     # クラウド（データセンターIP）対策：cookies / proxy を環境変数から任意注入。
     # 未設定なら従来通り（ローカルPCでは不要）。CLOUD_NOTES.md の最重要リスク対策。
     _cookiefile = os.environ.get("YTDLP_COOKIEFILE", "")
@@ -1309,7 +1398,10 @@ def run_pipeline_from_url(url: str, config: dict, log: LOG_CB,
 
     # ── Step 1: ダウンロード
     log("\n【Step 1/4】⬇️  動画ダウンロード中...")
-    dl_path = download_video(video_id, str(work_dir), log)
+    seg = pick_highlight_segment(video_id, model, config, log)
+    dl_path = download_video(video_id, str(work_dir), log,
+                             start=seg[0] if seg else None,
+                             end=seg[1] if seg else None)
     if not dl_path:
         log("❌ DL失敗"); return
 
@@ -1540,7 +1632,10 @@ def run_pipeline(config: dict, log: LOG_CB,
         # ── Step 3: ダウンロード
         log("\n【Step 3/6】⬇️  動画ダウンロード中...")
         time.sleep(SLEEP)
-        dl_path = download_video(video["id"], str(work_dir), log)
+        _seg = pick_highlight_segment(video["id"], model, config, log)
+        dl_path = download_video(video["id"], str(work_dir), log,
+                                 start=_seg[0] if _seg else None,
+                                 end=_seg[1] if _seg else None)
         if not dl_path:
             log("❌ DL失敗 → スキップ")
             continue
