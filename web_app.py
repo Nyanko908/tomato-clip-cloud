@@ -28,10 +28,16 @@ def resource_path(*parts) -> Path:
 
 CONFIG_PATH = Path.home() / ".tomato_clip_config.json"
 
+# 使うモデルは pipeline.py に一元化（-latest エイリアス＝Googleの廃止で死なない）
+try:
+    from pipeline import DEFAULT_MODEL as _DEFAULT_MODEL
+except Exception:
+    _DEFAULT_MODEL = "gemini-flash-lite-latest"
+
 # 既定値（app.py の DEFAULT_CONFIG と同義。新UIでも既定が欠落しないようマージする）
 _DEFAULTS = {
     "gemini_key": "", "youtube_key": "", "credentials_path": "",
-    "gemini_model": "gemini-2.5-flash-lite",
+    "gemini_model": _DEFAULT_MODEL,
     "output_resolution": "1080p", "encode_preset": "fast", "freshness_hours": 72,
     "search_keywords": "", "my_channel_id": "", "auto_memory": True,
     "agreed_terms": False, "ui_lang": "ja", "seen_tutorial": False,
@@ -39,10 +45,21 @@ _DEFAULTS = {
 }
 
 
+# 廃止済みモデル。設定に残っていると 404 で解析が全滅するので起動時に移行する。
+_RETIRED_MODELS = {
+    "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash",
+    "gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.5-flash-8b",
+}
+
+
 def load_config() -> dict:
     try:
         if CONFIG_PATH.exists():
-            return {**_DEFAULTS, **json.loads(CONFIG_PATH.read_text(encoding="utf-8"))}
+            cfg = {**_DEFAULTS, **json.loads(CONFIG_PATH.read_text(encoding="utf-8"))}
+            if cfg.get("gemini_model") in _RETIRED_MODELS:
+                cfg["gemini_model"] = _DEFAULT_MODEL   # 廃止モデルを掴んだままにしない
+                save_config(cfg)
+            return cfg
     except Exception:
         pass
     return dict(_DEFAULTS)
@@ -170,7 +187,7 @@ class Api:
                 return
             from pipeline import init_gemini
             from google.genai import types as gt
-            client = init_gemini(key, self.config.get("gemini_model", "gemini-2.5-flash-lite"))
+            client = init_gemini(key, self.config.get("gemini_model") or _DEFAULT_MODEL)
             prompt = ("次のメッセージにふさわしい、ごく短いタイトルを1つだけ付けてください。"
                       "入力と同じ言語で、最大18文字程度、記号・引用符・句読点なし、タイトルのみ出力。\n"
                       f"メッセージ: {first_message}")
@@ -304,7 +321,7 @@ class Api:
             "uid": (getattr(lic, "uid", "") or ""),
             "ui_lang": self.config.get("ui_lang", "ja"),
             "output_language": self.config.get("output_language", "ja"),
-            "gemini_model": self.config.get("gemini_model", "gemini-2.5-flash-lite"),
+            "gemini_model": self.config.get("gemini_model") or _DEFAULT_MODEL,
         }
 
     def get_youtube_dashboard(self, force=False):
@@ -513,6 +530,27 @@ class Api:
             return out
         except Exception:
             return []
+
+    def list_videos(self, limit=60):
+        """エディタの素材レール用：これまでに作った動画（新しい順）。"""
+        out = []
+        try:
+            import db, os
+            db.init_db()
+            rows = db.get_conn().execute(
+                "SELECT id, title, output_path, yt_url, posted_at FROM videos "
+                "WHERE output_path IS NOT NULL AND output_path <> '' "
+                "ORDER BY COALESCE(posted_at,'') DESC LIMIT ?", (int(limit),)).fetchall()
+            for r in rows:
+                path = r["output_path"] or ""
+                if not path or not os.path.exists(path):
+                    continue          # 消された動画は出さない
+                out.append({"id": r["id"], "title": r["title"] or "動画",
+                            "path": path, "yt_url": r["yt_url"] or "",
+                            "posted_at": r["posted_at"] or ""})
+        except Exception:
+            return []
+        return out
 
     @staticmethod
     def _task_prompt(t) -> str:

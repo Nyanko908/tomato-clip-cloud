@@ -44,7 +44,7 @@ try:
 except Exception:  # フォールバック（web_app が読めない環境向けの最小既定）
     _DESKTOP_DEFAULTS = {
         "gemini_key": "", "youtube_key": "", "credentials_path": "",
-        "gemini_model": "gemini-2.5-flash-lite",
+        "gemini_model": "gemini-flash-lite-latest",   # pipeline.DEFAULT_MODEL と同値
         "output_resolution": "1080p", "encode_preset": "fast", "freshness_hours": 72,
         "search_keywords": "", "my_channel_id": "", "auto_memory": True,
         "agreed_terms": False, "ui_lang": "ja", "seen_tutorial": False,

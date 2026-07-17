@@ -20,11 +20,21 @@ from key_rotator import setup_rotators, get_rotator
 
 LOG_CB  = Callable[[str], None]   # ログコールバック型
 
+# ════════════════════════════════════════════════════════
+#  使用モデル（ここが全アプリの単一の真実の源）
+# ════════════════════════════════════════════════════════
+# Google はモデルを予告なく廃止し、既存ユーザーだけ猶予を与える。
+# 具体的なバージョン名（gemini-2.5-flash-lite 等）を直接書くと、
+# 廃止された瞬間に「新規ユーザーだけ 404 で動かない」状態になり、
+# 開発者の環境では永遠に再現しない。必ず -latest エイリアスを使うこと。
+DEFAULT_MODEL  = "gemini-flash-lite-latest"   # 最速・最安（既定）
+FALLBACK_MODEL = "gemini-flash-latest"        # 既定が使えない時の逃げ先（既定と別物であること）
+
 
 # ════════════════════════════════════════════════════════
 #  Step 0: 初期化
 # ════════════════════════════════════════════════════════
-def init_gemini(api_key: str, model: str = "gemini-2.5-flash-lite"):
+def init_gemini(api_key: str, model: str = DEFAULT_MODEL):
     """APIキーからClientを作成して返す（model名は別途保持）"""
     client = genai.Client(api_key=api_key)
     client._model_name = model
@@ -32,7 +42,7 @@ def init_gemini(api_key: str, model: str = "gemini-2.5-flash-lite"):
     return client
 
 
-def init_gemini_rotated(log: LOG_CB, model: str = "gemini-2.5-flash-lite"):
+def init_gemini_rotated(log: LOG_CB, model: str = DEFAULT_MODEL):
     """キーローリング対応版 Gemini 初期化"""
     rot = get_rotator("gemini", log)
     key = rot.next()
@@ -413,6 +423,72 @@ def _get_ffmpeg_exe() -> Optional[str]:
         return None
 
 
+def probe_rotation(path: str) -> int:
+    """
+    動画の回転メタデータ（度）を返す。無ければ 0。
+    ffprobe は同梱していないので ffmpeg のログから読む。
+    ffmpeg 5+ は "displaymatrix: rotation of -90.00 degrees" 形式
+    （moviepy 1.0.3 は旧形式の "rotate :" しか見ないので常に0と誤検出する）。
+    """
+    ff = _get_ffmpeg_exe()
+    if not ff:
+        return 0
+    try:
+        import subprocess, re
+        r = subprocess.run([ff, "-hide_banner", "-i", str(path)],
+                           capture_output=True, timeout=30)
+        log_text = r.stderr.decode("utf-8", "ignore")
+        m = re.search(r"rotation of (-?[\d.]+) degrees", log_text)
+        if m:
+            return int(round(float(m.group(1)))) % 360
+        m = re.search(r"rotate\s*:\s*(\d+)", log_text)   # 旧形式も一応見る
+        if m:
+            return int(m.group(1)) % 360
+    except Exception:
+        pass
+    return 0
+
+
+def normalize_video(path: str, log: LOG_CB) -> str:
+    """
+    回転メタデータを映像に焼き込み、メタデータを取り除いた動画を返す。
+
+    なぜ必要か: 同じファイルを ffmpeg は自動回転して縦(1080x1920)として読み、
+    moviepy は回転を無視して横(1920x1080)として読む。この食い違いのせいで
+    「編集後の動画が横になる」。素材の時点で回転を無くしておけば、
+    以降のすべての経路が同じ寸法を見るようになる。
+    回転が無い動画（大多数）は再エンコードせずそのまま返す。
+    """
+    rot = probe_rotation(path)
+    if rot == 0:
+        return path
+    ff = _get_ffmpeg_exe()
+    if not ff:
+        log(f"⚠️ 回転{rot}°を検出しましたが ffmpeg が無く補正できません")
+        return path
+    src = Path(path)
+    out = src.with_name(src.stem + "_upright.mp4")
+    log(f"🔄 回転{rot}°を検出 → 映像に焼き込んで正規化します")
+    try:
+        import subprocess
+        # ffmpeg は入力時に自動回転して読むので、そのまま焼き直して
+        # 出力側の回転メタデータを 0 にする（=見たままの向きで固定）。
+        r = subprocess.run([
+            ff, "-y", "-hide_banner", "-loglevel", "error", "-i", str(src),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-metadata:s:v", "rotate=0",
+            "-c:a", "copy", str(out)
+        ], capture_output=True, timeout=900)
+        if r.returncode != 0 or not out.exists():
+            log(f"⚠️ 回転補正に失敗（元の動画で続行）: {r.stderr.decode('utf-8','ignore')[-160:]}")
+            return path
+        log(f"✅ 回転補正しました → {out.name}")
+        return str(out)
+    except Exception as e:
+        log(f"⚠️ 回転補正に失敗（元の動画で続行）: {e}")
+        return path
+
+
 def download_video(video_id: str, out_dir: str, log: LOG_CB) -> Optional[str]:
     url      = f"https://www.youtube.com/shorts/{video_id}"
     out_tmpl = str(Path(out_dir) / f"{video_id}.%(ext)s")
@@ -442,7 +518,9 @@ def download_video(video_id: str, out_dir: str, log: LOG_CB) -> Optional[str]:
         mp4 = next(Path(out_dir).glob(f"{video_id}*.mp4"), None)
         if mp4:
             log(f"✅ DL完了: {mp4.name}")
-            return str(mp4)
+            # 回転メタデータ付き素材は ffmpeg と moviepy で解釈が食い違い、
+            # 編集後の映像が横になる。ここで正規化して以降を安全にする。
+            return normalize_video(str(mp4), log)
         log("⚠️ DLファイルが見つかりません")
         return None
     except Exception as e:
@@ -453,10 +531,10 @@ def download_video(video_id: str, out_dir: str, log: LOG_CB) -> Optional[str]:
 # ════════════════════════════════════════════════════════
 #  Gemini 429 リトライヘルパー
 # ════════════════════════════════════════════════════════
-_FALLBACK_MODEL = "gemini-2.5-flash-lite"
+_FALLBACK_MODEL = FALLBACK_MODEL
 # 503(サーバー混雑)が続くときに順に試す代替モデル。
 # 混雑しているモデルとは別の容量プールに逃がして成功率を上げる。
-_CONGESTION_FALLBACK_CHAIN = ["gemini-2.5-flash", "gemini-2.0-flash"]
+_CONGESTION_FALLBACK_CHAIN = [FALLBACK_MODEL, "gemini-3.5-flash"]
 
 
 def _gemini_call(client, contents, log: LOG_CB = None) -> str:
@@ -474,17 +552,24 @@ def _gemini_call(client, contents, log: LOG_CB = None) -> str:
         err = str(e)
         if "429" in err or "quota" in err.lower():
             raise  # クォータ超過は呼び出し元のキーローテーションに任せる
-        is_model_error = (
-            model_name != _FALLBACK_MODEL
-            and any(x in err for x in ("NOT_FOUND", "is not found", "not supported"))
-        )
-        if not is_model_error:
+        if not any(x in err for x in ("NOT_FOUND", "is not found",
+                                      "not supported", "no longer available")):
             raise
-        if log:
-            log(f"⚠️ モデル「{model_name}」が利用できません → 「{_FALLBACK_MODEL}」に自動切替して再試行")
-        client._model_name = _FALLBACK_MODEL
-        resp = client.models.generate_content(model=_FALLBACK_MODEL, contents=contents)
-        return resp.text
+        # 設定モデルが廃止されていた。生きているモデルを順に試す。
+        # （以前は「逃げ先＝既定モデル」だったため、既定が廃止された瞬間に
+        #   保険が一切作動せず、新規ユーザーだけ解析が全滅していた）
+        for alt in [FALLBACK_MODEL, DEFAULT_MODEL, "gemini-3.5-flash"]:
+            if alt == model_name:
+                continue
+            try:
+                if log:
+                    log(f"⚠️ モデル「{model_name}」は利用できません → 「{alt}」に自動切替")
+                resp = client.models.generate_content(model=alt, contents=contents)
+                client._model_name = alt   # 以降はこのモデルを使う
+                return resp.text
+            except Exception:
+                continue
+        raise
 
 
 def _gemini_generate_with_retry(client, prompt_parts, log: LOG_CB,
@@ -1053,7 +1138,7 @@ def analyze_trends(config: dict, log: LOG_CB) -> dict:
     SLEEP       = gemini_rot.cooltime
 
     key   = gemini_rot.next() or config.get("gemini_key", "")
-    model = init_gemini(key, config.get("gemini_model", "gemini-2.5-flash-lite"))
+    model = init_gemini(key, config.get("gemini_model") or DEFAULT_MODEL)
 
     log("=" * 50)
     log("📊 トレンド分析 開始")
@@ -1192,7 +1277,7 @@ def run_pipeline_from_url(url: str, config: dict, log: LOG_CB,
     work_dir.mkdir(parents=True, exist_ok=True)
 
     key   = gemini_rot.next() or config.get("gemini_key", "")
-    model = init_gemini(key, config.get("gemini_model", "gemini-2.5-flash-lite"))
+    model = init_gemini(key, config.get("gemini_model") or DEFAULT_MODEL)
 
     log("=" * 50)
     log("🔗 URL指定パイプライン開始")
@@ -1378,7 +1463,7 @@ def run_pipeline(config: dict, log: LOG_CB,
 
     # Gemini モデル（ローリング）
     key   = gemini_rot.next() or config.get("gemini_key", "")
-    model = init_gemini(key, config.get("gemini_model", "gemini-2.5-flash-lite"))
+    model = init_gemini(key, config.get("gemini_model") or DEFAULT_MODEL)
 
     log("=" * 50)
     log("🏭 TOMATO SHORTS パイプライン開始")

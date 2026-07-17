@@ -151,7 +151,7 @@ class ChatEngine:
             self._emit("on_done")
 
     def _handle(self, text: str):
-        from pipeline import init_gemini
+        from pipeline import init_gemini, DEFAULT_MODEL as _DEFAULT_MODEL
         from google.genai import types as gt
 
         key = self.config.get("gemini_key", "")
@@ -159,7 +159,7 @@ class ChatEngine:
             self._emit("on_text", "❌ Gemini APIキーが設定されていません。設定から登録してください。")
             return
 
-        client = init_gemini(key, self.config.get("gemini_model", "gemini-2.5-flash-lite"))
+        client = init_gemini(key, self.config.get("gemini_model") or _DEFAULT_MODEL)
         self.history.append({"role": "user", "parts": [text]})
         system = _SYSTEM + f"\n現在時刻: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
