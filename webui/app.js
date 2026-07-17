@@ -573,23 +573,19 @@
       if (lbl) lbl.textContent = chatUI.t("ログイン");
     }
   };
-  // ================= スケジュール（週間タイムライン・DnD） =================
-  var HOURS = [0, 3, 6, 9, 12, 15, 18, 21];   // 3時間刻み8枠
+  // ================= スケジュール（月カレンダー・DnD） =================
+  // 予約は「時刻 ＋ プロンプト」。日をクリックして、話しかけるように書くだけ。
   var WDAY = ["月", "火", "水", "木", "金", "土", "日"];
-  var _schedWeekStart = null;   // その週の月曜0時
+  var _schedMonth = null;   // 表示中の月の1日
   var _schedTasks = [];
 
-  function mondayOf(d) {
-    var x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    var wd = (x.getDay() + 6) % 7;   // 月=0
-    x.setDate(x.getDate() - wd);
-    return x;
-  }
+  function firstOf(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
   function pad2(n) { return (n < 10 ? "0" : "") + n; }
   function localISO(dt) {   // タイムゾーンずれを避けてローカルISO（秒まで）
     return dt.getFullYear() + "-" + pad2(dt.getMonth() + 1) + "-" + pad2(dt.getDate()) +
       "T" + pad2(dt.getHours()) + ":" + pad2(dt.getMinutes()) + ":00";
   }
+  function dayKey(d) { return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()); }
 
   chatUI.closeSchedule = function () {
     var p = document.getElementById("schedulePanel"); if (p) p.style.display = "none";
@@ -599,95 +595,86 @@
     chatUI.closeStats && chatUI.closeStats();
     chatUI.closeCloud && chatUI.closeCloud();
     var p = document.getElementById("schedulePanel"); if (p) p.style.display = "flex";
-    if (!_schedWeekStart) _schedWeekStart = mondayOf(new Date());
+    if (!_schedMonth) _schedMonth = firstOf(new Date());
     wirePalette();
     loadSchedule();
   };
-  chatUI.schedWeek = function (dir) {
-    if (!_schedWeekStart) _schedWeekStart = mondayOf(new Date());
-    if (dir === 0) _schedWeekStart = mondayOf(new Date());
-    else _schedWeekStart = new Date(_schedWeekStart.getTime() + dir * 7 * 864e5);
-    renderWeek();
+  // ‹ / › / 今月
+  chatUI.schedMonth = function (dir) {
+    if (!_schedMonth) _schedMonth = firstOf(new Date());
+    if (dir === 0) _schedMonth = firstOf(new Date());
+    else _schedMonth = new Date(_schedMonth.getFullYear(), _schedMonth.getMonth() + dir, 1);
+    renderMonth();
   };
 
   function loadSchedule() {
     var a = api();
-    if (!a || !a.list_schedule) { _schedTasks = []; renderWeek(); return; }
+    if (!a || !a.list_schedule) { _schedTasks = []; renderMonth(); return; }
     a.list_schedule().then(function (list) {
       try { list = typeof list === "string" ? JSON.parse(list) : list; } catch (e) {}
       _schedTasks = list || [];
-      renderWeek();
-    }).catch(function () { _schedTasks = []; renderWeek(); });
+      renderMonth();
+    }).catch(function () { _schedTasks = []; renderMonth(); });
   }
 
-  function slotIndexForHour(h) {   // 時刻→最も近い下の枠index
-    var idx = 0;
-    for (var i = 0; i < HOURS.length; i++) if (h >= HOURS[i]) idx = i;
-    return idx;
-  }
-
-  function renderWeek() {
+  function renderMonth() {
     var grid = document.getElementById("schedGrid");
-    if (!grid || !_schedWeekStart) return;
-    var ws = _schedWeekStart;
-    var end = new Date(ws.getTime() + 6 * 864e5);
+    if (!grid || !_schedMonth) return;
+    var first = _schedMonth;
     var lbl = document.getElementById("schedWeekLabel");
-    if (lbl) lbl.textContent = (ws.getMonth() + 1) + "/" + ws.getDate() + " – " + (end.getMonth() + 1) + "/" + end.getDate();
+    if (lbl) lbl.textContent = first.getFullYear() + "年 " + (first.getMonth() + 1) + "月";
+
+    // グリッドの開始＝その月の1日を含む週の月曜
+    var lead = (first.getDay() + 6) % 7;             // 月=0
+    var gridStart = new Date(first.getFullYear(), first.getMonth(), 1 - lead);
     var now = new Date();
-    var todayKey = now.getFullYear() + "-" + now.getMonth() + "-" + now.getDate();
+    var todayK = dayKey(now);
 
-    // header
-    var head = "<thead><tr><th></th>";
-    for (var d = 0; d < 7; d++) {
-      var day = new Date(ws.getTime() + d * 864e5);
-      var isToday = (day.getFullYear() + "-" + day.getMonth() + "-" + day.getDate()) === todayKey;
-      head += '<th class="' + (isToday ? "today" : "") + '">' + WDAY[d] +
-        '<div class="th-d">' + day.getDate() + "</div></th>";
-    }
-    head += "</tr></thead>";
-
-    // body: task lookup by cell
-    var byCell = {};
+    // 予約を日付ごとに束ねる（時刻順）
+    var byDay = {};
     _schedTasks.forEach(function (t) {
       var dt = new Date(t.run_at);
       if (isNaN(dt)) return;
-      var dcol = Math.floor((new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()) - ws) / 864e5);
-      if (dcol < 0 || dcol > 6) return;
-      var row = slotIndexForHour(dt.getHours());
-      (byCell[dcol + "_" + row] = byCell[dcol + "_" + row] || []).push(t);
+      (byDay[dayKey(dt)] = byDay[dayKey(dt)] || []).push(t);
+    });
+    Object.keys(byDay).forEach(function (k) {
+      byDay[k].sort(function (a, b) { return new Date(a.run_at) - new Date(b.run_at); });
     });
 
-    var body = "<tbody>";
-    for (var r = 0; r < HOURS.length; r++) {
-      body += "<tr><td class='timecol'>" + pad2(HOURS[r]) + ":00</td>";
+    var head = "<thead><tr>";
+    for (var w = 0; w < 7; w++) head += '<th class="' + (w >= 5 ? "we" : "") + '">' + WDAY[w] + "</th>";
+    head += "</tr></thead>";
+
+    // 6週まで（その月が収まったら止める）
+    var body = "<tbody>", cur = new Date(gridStart);
+    for (var r = 0; r < 6; r++) {
+      body += "<tr>";
       for (var c = 0; c < 7; c++) {
-        var cellDate = new Date(ws.getTime() + c * 864e5);
-        cellDate.setHours(HOURS[r], 0, 0, 0);
-        var isPast = cellDate.getTime() < now.getTime() - 60000;
-        var cards = (byCell[c + "_" + r] || []).map(function (t) {
-          // スケジュール＝プロンプト。書いた文章そのものをカードに出す
-          var p = t.prompt || "";
-          var mm = new Date(t.run_at);
-          var hhmm = isNaN(mm) ? "" : pad2(mm.getHours()) + ":" + pad2(mm.getMinutes());
+        var k = dayKey(cur);
+        var out = cur.getMonth() !== first.getMonth();
+        var isToday = k === todayK;
+        var isPast = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1) <= now;
+        var items = (byDay[k] || []).map(function (t) {
+          var dt = new Date(t.run_at);
+          var hhmm = pad2(dt.getHours()) + ":" + pad2(dt.getMinutes());
           return '<div class="scard' + (t.repeat ? " rep" : "") + '" draggable="true" data-tid="' + t.id + '"' +
-            ' title="' + esc(hhmm + "  " + p) + '">' +
+            ' title="' + esc(hhmm + "  " + (t.prompt || "")) + '">' +
             '<span class="sc-time">' + hhmm + (t.repeat ? " 🔁" : "") + "</span>" +
-            '<span class="sc-p">' + esc(p) + "</span>" +
+            '<span class="sc-p">' + esc(t.prompt || "") + "</span>" +
             '<span class="x" data-cancel="' + t.id + '">✕</span></div>';
         }).join("");
-        body += '<td class="' + (isPast ? "past" : "") + '" data-col="' + c + '" data-row="' + r + '">' + cards + "</td>";
+        body += '<td class="daycell' + (out ? " out" : "") + (isToday ? " today" : "") +
+          (isPast ? " past" : "") + '" data-day="' + k + '">' +
+          '<div class="day-num">' + cur.getDate() + "</div>" +
+          '<div class="day-items">' + items + "</div></td>";
+        cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1);
       }
       body += "</tr>";
+      if (cur.getMonth() !== first.getMonth() && cur > first) break;
     }
     body += "</tbody>";
     grid.innerHTML = head + body;
     wireGridDnD();
-  }
-
-  function cellDateTime(col, row) {
-    var dt = new Date(_schedWeekStart.getTime() + col * 864e5);
-    dt.setHours(HOURS[row], 0, 0, 0);
-    return dt;
   }
 
   var _dragPrompt = null, _dragTaskId = null;
@@ -705,21 +692,29 @@
     }
   }
 
-  // ── 革命の中心：セルに直接プロンプトを書く ──
-  // 空きセルをクリック → その場に入力欄。Enter で予約、Esc で取り消し。
-  function openSlotEditor(td, opts) {
+  // 既定の時刻：今日なら次の正時、先の日付なら10:00
+  function defaultTimeFor(key) {
+    var d = new Date();
+    if (key !== dayKey(d)) return "10:00";
+    var h = d.getHours() + 1;
+    return h > 23 ? "23:30" : pad2(h) + ":00";
+  }
+
+  // ── 革命の中心：日をクリックして「時刻＋プロンプト」を書く ──
+  function openDayEditor(td, opts) {
     opts = opts || {};
-    if (td.querySelector(".sc-edit")) return;
-    var col = parseInt(td.getAttribute("data-col"), 10);
-    var row = parseInt(td.getAttribute("data-row"), 10);
+    var host = td.querySelector(".day-items") || td;
+    if (host.querySelector(".sc-edit")) return;
+    var key = td.getAttribute("data-day");
     var box = document.createElement("div");
     box.className = "sc-edit";
-    box.innerHTML = '<textarea rows="2" placeholder="' + esc(chatUI.t("話しかけるように書く…")) + '"></textarea>';
-    td.appendChild(box);
-    var ta = box.querySelector("textarea");
+    box.innerHTML = '<input type="time" class="sc-time-in" value="' +
+      (opts.time || defaultTimeFor(key)) + '">' +
+      '<textarea rows="2" placeholder="' + esc(chatUI.t("話しかけるように書く…")) + '"></textarea>';
+    host.appendChild(box);
+    var ta = box.querySelector("textarea"), ti = box.querySelector(".sc-time-in");
     ta.value = opts.value || "";
     ta.focus();
-    ta.select && ta.select();
 
     var closed = false;
     function close() { if (!closed) { closed = true; box.remove(); } }
@@ -727,15 +722,22 @@
       var text = ta.value.trim();
       if (!text) { close(); return; }
       var a = api(); if (!a) { close(); return; }
+      var hm = (ti.value || "10:00").split(":");
+      var parts = key.split("-");
+      var dt = new Date(+parts[0], +parts[1] - 1, +parts[2], +hm[0] || 0, +hm[1] || 0, 0);
       var after = function (list) {
         try { list = typeof list === "string" ? JSON.parse(list) : list; } catch (er) {}
-        if (list && !list.error) { _schedTasks = list; renderWeek(); }
-        else if (list && list.error) { close(); }
+        if (list && !list.error) { _schedTasks = list; renderMonth(); }
       };
-      if (opts.taskId != null && a.update_schedule_prompt) {
-        a.update_schedule_prompt(opts.taskId, text).then(after);
+      if (opts.taskId != null) {
+        // 文章と時刻の両方を反映（時刻が変わっていれば移動も）
+        var done = function () {
+          if (a.update_schedule_prompt) a.update_schedule_prompt(opts.taskId, text).then(after);
+        };
+        if (opts.iso !== localISO(dt) && a.reschedule) a.reschedule(opts.taskId, localISO(dt)).then(done);
+        else done();
       } else if (a.add_schedule) {
-        a.add_schedule(localISO(cellDateTime(col, row)), text, null).then(after);
+        a.add_schedule(localISO(dt), text, null).then(after);
       }
       close();
     }
@@ -743,13 +745,16 @@
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); save(); }   // Shift+Enter で改行
       else if (e.key === "Escape") { e.preventDefault(); close(); }
     });
-    ta.addEventListener("blur", save);   // 外をクリックしても保存
+    ta.addEventListener("blur", function () {
+      // 時刻入力へフォーカスが移っただけなら閉じない
+      setTimeout(function () { if (!box.contains(document.activeElement)) save(); }, 0);
+    });
     box.addEventListener("click", function (e) { e.stopPropagation(); });
   }
+
   function wireGridDnD() {
     var grid = document.getElementById("schedGrid");
     if (!grid) return;
-    // 既存カードの drag（移動）と ✕（削除）
     grid.querySelectorAll(".scard").forEach(function (card) {
       card.addEventListener("dragstart", function (e) {
         _dragTaskId = parseInt(this.getAttribute("data-tid"), 10);
@@ -757,14 +762,18 @@
         try { e.dataTransfer.setData("text/plain", "card"); e.dataTransfer.effectAllowed = "move"; } catch (x) {}
         e.stopPropagation();
       });
-      // カードをクリック → 文章を書き直す
+      // カードをクリック → 時刻と文章を書き直す
       card.addEventListener("click", function (e) {
         if (e.target.hasAttribute("data-cancel")) return;   // ✕ は削除
         e.stopPropagation();
-        var tid = parseInt(this.getAttribute("data-tid"), 10);
-        var t = null;
+        var tid = parseInt(this.getAttribute("data-tid"), 10), t = null;
         for (var i = 0; i < _schedTasks.length; i++) if (_schedTasks[i].id === tid) t = _schedTasks[i];
-        openSlotEditor(this.parentNode, { value: t ? t.prompt : "", taskId: tid });
+        if (!t) return;
+        var dt = new Date(t.run_at);
+        openDayEditor(this.closest("td"), {
+          value: t.prompt, taskId: tid, iso: t.run_at,
+          time: pad2(dt.getHours()) + ":" + pad2(dt.getMinutes())
+        });
       });
     });
     grid.querySelectorAll("[data-cancel]").forEach(function (x) {
@@ -773,44 +782,46 @@
         var id = parseInt(this.getAttribute("data-cancel"), 10);
         var a = api(); if (a && a.cancel_schedule) a.cancel_schedule(id).then(function (list) {
           try { list = typeof list === "string" ? JSON.parse(list) : list; } catch (er) {}
-          _schedTasks = list || []; renderWeek();
+          _schedTasks = list || []; renderMonth();
         });
       });
     });
-    // セルの drop 受け
-    grid.querySelectorAll("td[data-col]").forEach(function (td) {
+    grid.querySelectorAll("td.daycell").forEach(function (td) {
       td.addEventListener("dragover", function (e) {
         if (td.classList.contains("past")) return;
         e.preventDefault(); td.classList.add("dragover");
       });
       td.addEventListener("dragleave", function () { td.classList.remove("dragover"); });
-      // 空きセルをクリック → その場でプロンプトを書く
-      td.addEventListener("click", function (e) {
-        if (td.classList.contains("past")) return;
-        if (e.target.closest && e.target.closest(".scard")) return;   // カードは編集扱い
-        openSlotEditor(td);
-      });
       td.addEventListener("drop", function (e) {
         e.preventDefault(); td.classList.remove("dragover");
         if (td.classList.contains("past")) return;
-        var col = parseInt(td.getAttribute("data-col"), 10);
-        var row = parseInt(td.getAttribute("data-row"), 10);
-        var iso = localISO(cellDateTime(col, row));
+        var key = td.getAttribute("data-day"), parts = key.split("-");
         var a = api(); if (!a) return;
         var after = function (list) {
           try { list = typeof list === "string" ? JSON.parse(list) : list; } catch (er) {}
-          if (list && !list.error) { _schedTasks = list; renderWeek(); }
+          if (list && !list.error) { _schedTasks = list; renderMonth(); }
         };
         if (_dragTaskId != null && a.reschedule) {
-          a.reschedule(_dragTaskId, iso).then(after);
+          // 別の日へ移動：時刻は保ったまま日付だけ差し替える
+          var t = null;
+          for (var i = 0; i < _schedTasks.length; i++) if (_schedTasks[i].id === _dragTaskId) t = _schedTasks[i];
+          var old = t ? new Date(t.run_at) : new Date();
+          var dt = new Date(+parts[0], +parts[1] - 1, +parts[2], old.getHours(), old.getMinutes(), 0);
+          a.reschedule(_dragTaskId, localISO(dt)).then(after);
         } else if (_dragPrompt != null) {
-          // チップを置いた時は、そのまま確定せず文章を直せる状態で開く
-          openSlotEditor(td, { value: _dragPrompt });
+          openDayEditor(td, { value: _dragPrompt });   // 文章を直せる状態で開く
         }
         _dragPrompt = null; _dragTaskId = null;
       });
+      // 空きスペースをクリック → その日に予約を書く
+      td.addEventListener("click", function (e) {
+        if (td.classList.contains("past")) return;
+        if (e.target.closest && e.target.closest(".scard")) return;
+        openDayEditor(td);
+      });
     });
   }
+
 
   // ================= 統計ダッシュボード（YouTube Data API v3・Studio風） =================
   function nfmt(n) {
