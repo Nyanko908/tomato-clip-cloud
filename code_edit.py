@@ -114,14 +114,40 @@ class TC:
     後段（字幕・レイアウト）はオペログから TimeMap を再構築して追従する。
     """
 
-    def __init__(self, log: LOG_CB):
+    def __init__(self, log: LOG_CB, captions=None):
         from editor import TimeMap
         self._tmap = TimeMap()
         self._log = log
         self.ops = []          # [{"op":"cuts"|"speed"|"insert", ...}] 適用済み座標で記録
+        self.captions = list(captions or [])   # 解析結果の字幕（text/start/end/funny）
+        self.handled_captions = False          # True=字幕はコードが描いた（既定字幕を置かない）
 
     def log(self, msg):
         self._log(f"  🐍 {msg}")
+
+    # ── 字幕の自作サポート ──
+    def take_captions(self):
+        """字幕を自分のコードで描くと宣言する。既定レンダラーは字幕を配置しなくなる。"""
+        self.handled_captions = True
+        self.log("字幕はコード側で描画します")
+
+    def font(self, size=58, style=None):
+        """同梱フォント（日本語対応）の PIL ImageFont を返す。
+        moviepyのTextClipはImageMagick必須で使えないため、文字はPILで描く。"""
+        from editor import _font
+        return _font(int(size), style)
+
+    def text_image(self, text, size=58, color="#FFFFFF", stroke="#000000", style=None):
+        """縁取り付きテキストの RGBA PIL Image を返す（字幕・テロップの自作素材）。"""
+        from PIL import Image, ImageDraw
+        f = self.font(size, style)
+        dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        w = max(2, int(dummy.textlength(text, font=f)))
+        img = Image.new("RGBA", (w + 28, int(size) + 28), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        d.text((16, 10), text, font=f, fill=stroke)
+        d.text((14, 8), text, font=f, fill=color)
+        return img
 
     # ── 尺が変わる操作（必ずこれを使う） ──
     def cut(self, clip, ranges):
@@ -190,10 +216,12 @@ class TC:
 # ════════════════════════════════════════════════════════
 #  実行（別スレッド + タイムアウト。凍結EXEでも動く）
 # ════════════════════════════════════════════════════════
-def run_edit_code(code: str, src_path: str, out_path: str, log: LOG_CB) -> dict:
+def run_edit_code(code: str, src_path: str, out_path: str, log: LOG_CB,
+                  captions=None) -> dict:
     """
     検証済みコードを実行し、編集結果を out_path（中間動画・ほぼ無劣化）に書く。
-    戻り: {"ok": True, "oplog": [...], "duration": float} / {"ok": False, "error": "..."}
+    戻り: {"ok": True, "oplog": [...], "duration": float, "handled_captions": bool}
+          / {"ok": False, "error": "..."}
     """
     err = validate_code(code)
     if err:
@@ -205,7 +233,7 @@ def run_edit_code(code: str, src_path: str, out_path: str, log: LOG_CB) -> dict:
         clip = None
         try:
             from moviepy.editor import VideoFileClip
-            tc = TC(log)
+            tc = TC(log, captions=captions)
             g = {"__builtins__": _safe_builtins()}
             exec(compile(code, "<tomato_edit>", "exec"), g)   # AST検査済み
             clip = VideoFileClip(src_path)
@@ -225,7 +253,8 @@ def run_edit_code(code: str, src_path: str, out_path: str, log: LOG_CB) -> dict:
                 ffmpeg_params=["-crf", "12"],
             )
             result.update({"ok": True, "oplog": tc.ops,
-                           "duration": float(out.duration)})
+                           "duration": float(out.duration),
+                           "handled_captions": bool(tc.handled_captions)})
         except Exception:
             result.update({"ok": False, "error": traceback.format_exc(limit=6)})
         finally:
@@ -263,30 +292,27 @@ def rebuild_timemap(oplog: list):
 # ════════════════════════════════════════════════════════
 #  コード生成（自己修復ループ）＋ プラグイン注入
 # ════════════════════════════════════════════════════════
+# ルールは最小限にし、書き方はサンプルで見せる（サンプル主体の方が直感的に書ける）。
 _SDK_DOC = """
-【SDK仕様】def edit(clip, tc): を定義し、編集後の clip を return すること。
-時刻はすべて「元動画の秒」で指定してよい（tcが内部で換算する）。
-
-尺が変わる操作は必ず tc を使う（字幕の自動追従のため）:
-  clip = tc.cut(clip, [(12.0, 18.5), ...])       # 区間を取り除く
-  clip = tc.fastforward(clip, s, e, speed=2.0)   # 早送り
-  clip = tc.rewind(clip, at, dur=1.5)            # 直前を逆再生
-  clip = tc.freeze(clip, at, dur=1.5)            # 静止フレーム
-見た目だけの演出（尺不変）:
-  clip = tc.zoom(clip, s, e, scale=1.5)
-  clip = tc.monochrome(clip, s, e) / tc.flip(clip, s, e) / tc.mosaic(clip, s, e)
-自由演出: moviepy を直接使ってよい（import moviepy / numpy / math / random / PIL のみ可）。
-ただし尺を変えるのは禁止（変えたい時は tc を使う）。区間指定には tc.t(元秒) で現在秒に変換。
-禁止: ファイル入出力・ネットワーク・os/subprocess・eval等（検査で弾かれる）。
-進捗は tc.log("...") で出せる。
+【書き方】def edit(clip, tc): を定義し、編集後の clip を return する。ルールは2つだけ:
+1. 尺（長さ）が変わる操作は tc を使う … tc.cut([(s,e),..]) / tc.fastforward(s,e,speed)
+   / tc.rewind(at,dur) / tc.freeze(at,dur)。字幕が後工程で自動配置されるので、
+   tc を通せば絶対にズレない。
+2. それ以外は moviepy で自由に書いてよい（import可: moviepy/numpy/math/random/PIL。
+   ファイル入出力・ネットワーク・os等は禁止＝自動検査で弾かれる）。
+時刻は「元動画の秒」で書く。自由演出で区間を切り出す時は tc.t(元秒) で現在秒に変換。
+進捗コメントは tc.log("...")。tc.zoom/monochrome/flip/mosaic も使える（尺不変の定番）。
+字幕を独自スタイルで描きたい時は tc.take_captions() を呼び、tc.captions（解析結果）と
+tc.text_image(text, size, color)（日本語対応フォントのPIL画像）で自分で描く（サンプル4）。
+呼ばなければ後工程が既定スタイルで字幕を配置する。
 """
 
 _SAMPLES = '''
 【サンプル1: 無音カット + 見せ場ズーム】
 def edit(clip, tc):
-    tc.log("無音区間をカット")
+    tc.log("無音区間をカットしてテンポアップ")
     clip = tc.cut(clip, [(12.0, 15.5)])
-    tc.log("見せ場をズーム")
+    tc.log("見せ場を強調")
     clip = tc.zoom(clip, 24.0, 27.0, scale=1.6)
     return clip
 
@@ -297,6 +323,39 @@ def edit(clip, tc):
     from moviepy.editor import vfx
     clip = clip.fx(vfx.colorx, 1.12)   # 尺不変の演出は自由
     return clip
+
+【サンプル3: 座標を指定した自由演出（リアクションに寄るクロップ）】
+def edit(clip, tc):
+    from moviepy.editor import vfx, concatenate_videoclips
+    w, h = clip.size
+    s, e = tc.t(30.0), tc.t(33.0)       # 元動画の30〜33秒を現在秒に変換
+    part = (clip.subclip(s, e)
+                .fx(vfx.crop, x1=w*0.2, y1=h*0.1, x2=w*0.8, y2=h*0.7)  # 顔のあたりを切り出し
+                .resize((w, h)))         # 同じ画面サイズに戻す＝実質ズーム
+    clip = concatenate_videoclips([clip.subclip(0, s), part, clip.subclip(e)])
+    return clip                          # 尺は変わっていないのでOK
+
+【サンプル4: 字幕を自作する（1文字ずつ出るタイピング演出）。
+ 既定の字幕スタイルが動画に合わない時は tc.take_captions() で自分で描いてよい】
+def edit(clip, tc):
+    tc.take_captions()                   # 既定レンダラーの字幕を止めて自分で描く宣言
+    from moviepy.editor import CompositeVideoClip, ImageClip
+    import numpy, random
+    w, h = clip.size
+    layers = [clip]
+    for cap in tc.captions:              # 解析結果の字幕 [{"text","start","end","funny"}]
+        s, e = tc.t(cap["start"]), tc.t(cap["end"])
+        text, step = cap["text"], 0.05
+        for i in range(1, len(text) + 1):        # 1文字ずつ増やす＝タイピング
+            img = tc.text_image(text[:i], size=64, color="#FFF000" if cap.get("funny") else "#FFFFFF")
+            t0 = s + (i - 1) * step
+            # 次の文字が出たら前の状態は消す（最後だけ end まで表示）。重ねると文字が濁る
+            d = step if i < len(text) else max(0.1, e - t0)
+            jitter = random.randint(-3, 3)       # 少し揺らすと勢いが出る
+            layers.append(ImageClip(numpy.array(img)).set_start(t0)
+                          .set_duration(d)
+                          .set_position(("center", int(h * 0.82) + jitter)))
+    return CompositeVideoClip(layers)    # 尺は変わっていないのでOK
 '''
 
 
@@ -393,12 +452,15 @@ def apply_code_edit(client, src_path: str, analysis: dict, log: LOG_CB,
             feedback = f"コード検証エラー: {err}"
             continue
         log(f"  ▶ 実行中 ({attempt}/3)...")
-        res = run_edit_code(code, src_path, out_path, log)
+        res = run_edit_code(code, src_path, out_path, log,
+                            captions=analysis.get("captions"))
         if res.get("ok"):
             analysis["edit_code"] = code
             analysis["code_oplog"] = res.get("oplog", [])
             analysis["code_intermediate"] = out_path
-            log(f"  ✅ Python編集完了（{res.get('duration', 0):.1f}秒 / 操作{len(res.get('oplog', []))}件）")
+            analysis["code_handled_captions"] = bool(res.get("handled_captions"))
+            log(f"  ✅ Python編集完了（{res.get('duration', 0):.1f}秒 / 操作{len(res.get('oplog', []))}件"
+                + ("・字幕はコード描画" if res.get("handled_captions") else "") + "）")
             return True
         log(f"  ✂ 実行エラー ({attempt}/3) → 書き直します")
         feedback = f"実行時エラー:\n{res.get('error', '')[:1500]}"

@@ -808,9 +808,12 @@ def run_edit(video_path: str, analysis: dict,
         draw.text((10, 4), text, font=font, fill=color)
         overlays.append((img, "center", y, 0.0, title_end))
 
-    # 字幕
+    # 字幕（Python編集コードが tc.take_captions() で自作した場合は置かない）
     caption_times = []
-    for cap in analysis.get("captions", []):
+    caps = [] if analysis.get("code_handled_captions") else analysis.get("captions", [])
+    if analysis.get("code_handled_captions"):
+        log("  💬 字幕はPython編集コードが描画済み → 既定字幕はスキップ")
+    for cap in caps:
         t = cap.get("text", "")
         fny = cap.get("funny", False)
         if not t or float(cap.get("end", 0)) <= float(cap.get("start", 0)):
@@ -824,8 +827,19 @@ def run_edit(video_path: str, analysis: dict,
         s = min(s, max(0.0, dur - 0.1))
         e = min(e, dur)
         img = _caption_image(t, fny, fs_caption, style=font_style)
-        y   = th - CAPTION_ZONE_H + (CAPTION_ZONE_H - img.height) // 2
-        overlays.append((img, "center", y, s, e))
+        # 位置：AIが x/y（0〜1の比率）を指定したら尊重、無指定は従来の下部ゾーン中央
+        x = "center"
+        try:
+            if cap.get("y") is not None:
+                y = int(min(max(float(cap["y"]), 0.0), 1.0) * (th - img.height))
+            else:
+                y = th - CAPTION_ZONE_H + (CAPTION_ZONE_H - img.height) // 2
+            if cap.get("x") is not None:
+                x = int(min(max(float(cap["x"]), 0.0), 1.0) * (tw - img.width))
+        except (TypeError, ValueError):
+            y = th - CAPTION_ZONE_H + (CAPTION_ZONE_H - img.height) // 2
+            x = "center"
+        overlays.append((img, x, y, s, e))
         caption_times.append((s, e))
 
     # 引用元（最後3秒に表示）

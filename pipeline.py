@@ -997,7 +997,8 @@ def analyze_video(model, video_path: str, log: LOG_CB, gemini_rot=None, chat_con
   "description":"YouTube の説明文（200文字、ハッシュタグ含む）",
   "tags":       ["タグ1","タグ2",...最大10個],
   "captions": [
-    {"start": float, "end": float, "text": "ユーモアある字幕テキスト（指定された出力言語で）", "funny": bool}
+    {"start": float, "end": float, "text": "ユーモアある字幕テキスト（指定された出力言語で）", "funny": bool,
+     "x": 0.5, "y": 0.9}
   ],
   "cut_sections": [
     {"start": float, "end": float, "reason": "カット理由（無音/静止/冗長など）"}
@@ -1676,6 +1677,35 @@ def run_pipeline_from_url(url: str, config: dict, log: LOG_CB,
     log("=" * 50)
 
 
+def _expand_theme(model, kw: str, log: LOG_CB):
+    """
+    テーマ語をYouTube上の実表記に展開する（例:「アイアンマウス」→ ironmouse）。
+    日本語名と原語名が違う海外の配信者・ゲーム等では、カタカナのまま検索・
+    タイトル照合しても空振りし、無関係のバズ動画を採用してしまう（実際に起きた）。
+    """
+    prompt = (
+        f"YouTubeで動画を探す準備。テーマ:「{kw}」\n"
+        "対象（人物・チャンネル・ゲーム・番組など）がYouTube上で使われる代表的な表記を、"
+        "原語（英語名など）・カタカナ・略称を含めて挙げてください。\n"
+        'JSONのみ返答（コードブロック不要）: '
+        '{"queries": ["検索クエリを2〜4個（原語表記を優先、雰囲気語は残す）"], '
+        '"match_terms": ["動画タイトル/チャンネル名との照合に使う対象の表記を2〜6個（すべて小文字）"]}'
+    )
+    try:
+        import re as _re
+        raw = _gemini_call(model, prompt)
+        txt = _re.sub(r"^```(?:json)?|```$", "", (raw or "").strip(), flags=_re.M).strip()
+        d = json.loads(txt)
+        qs = [str(q).strip() for q in d.get("queries", []) if str(q).strip()][:4]
+        ts = [str(t).strip().lower() for t in d.get("match_terms", []) if str(t).strip()][:6]
+        if qs and ts:
+            log(f"   🌐 表記ゆれを展開: {', '.join(ts)}")
+            return {"queries": qs, "match_terms": ts}
+    except Exception as e:
+        log(f"   ⚠️ テーマ展開に失敗（原文のまま検索します）: {str(e)[:60]}")
+    return None
+
+
 def run_pipeline(config: dict, log: LOG_CB,
                  on_video_ready: Callable = None,
                  stop_event: threading.Event = None,
@@ -1715,10 +1745,17 @@ def run_pipeline(config: dict, log: LOG_CB,
     # ── Step 1: 発見（GeminiがDBを読んでクエリ生成 → 検索 → ダブりチェック）
     log("\n【Step 1/6】🔍 動画発見中...")
     force_kw = str(config.get("force_keyword", "")).strip()
+    theme_terms = []
     if force_kw:
         log(f"   🎯 指定テーマで検索: {force_kw}")
-        ai_queries = [{"keyword": force_kw, "category": "user", "note": "ユーザー指定テーマ"},
-                      {"keyword": f"{force_kw} clip", "category": "user", "note": "ユーザー指定テーマ"}]
+        _exp = _expand_theme(model, force_kw, log)
+        if _exp:
+            ai_queries = [{"keyword": q, "category": "user", "note": "ユーザー指定テーマ"}
+                          for q in _exp["queries"]]
+            theme_terms = _exp["match_terms"]
+        else:
+            ai_queries = [{"keyword": force_kw, "category": "user", "note": "ユーザー指定テーマ"},
+                          {"keyword": f"{force_kw} clip", "category": "user", "note": "ユーザー指定テーマ"}]
     else:
         log("   🧠 GeminiがDBを読んで検索クエリを生成します...")
         time.sleep(SLEEP)
@@ -1736,13 +1773,14 @@ def run_pipeline(config: dict, log: LOG_CB,
     )
 
     # 指定テーマの場合、タイトル/チャンネル名にテーマ語を含む動画だけに絞る
-    # （バズっているだけの無関係動画を掴まないため）
+    # （バズっているだけの無関係動画を掴まないため）。照合語は表記ゆれ展開済みの
+    # theme_terms を優先（「アイアンマウス」だけだと英題 Ironmouse に一致しない）。
     if force_kw and videos:
         import re as _re
         _STOP = {"clip", "clips", "shorts", "short", "funny", "moments", "video",
                  "切り抜き", "面白", "まとめ"}
-        toks = [t for t in _re.split(r"[\s　]+", force_kw.lower())
-                if len(t) >= 3 and t not in _STOP]
+        toks = theme_terms or [t for t in _re.split(r"[\s　]+", force_kw.lower())
+                               if len(t) >= 3 and t not in _STOP]
         if toks:
             strict = [v for v in videos
                       if any(t in (v["title"] + " " + v["channel"]).lower() for t in toks)]
@@ -1750,7 +1788,10 @@ def run_pipeline(config: dict, log: LOG_CB,
                 log(f"   🎯 テーマ一致: {len(strict)}/{len(videos)} 件に絞り込み")
                 videos = strict
             else:
-                log("   ⚠️ テーマ語がタイトルに含まれる動画なし → 絞り込みをスキップ")
+                # 無関係のバズ動画を作るより、正直に「見つからない」と伝える
+                log(f"   ⚠️ テーマ「{force_kw}」に一致する動画が見つかりませんでした")
+                log("      （表記を変える・別のテーマにする等でもう一度お試しください）")
+                return
 
     if stop_event and stop_event.is_set():
         log("⏹ 停止しました"); return
