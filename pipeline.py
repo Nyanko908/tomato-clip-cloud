@@ -1552,6 +1552,13 @@ def run_pipeline_from_url(url: str, config: dict, log: LOG_CB,
     analysis["tmpl_config"]  = {}
     analysis["footage_path"] = None
 
+    # Python編集（常時有効・失敗時は従来編集に自動フォールバック）
+    try:
+        import code_edit
+        code_edit.apply_code_edit(model, dl_path, analysis, log, config)
+    except Exception as e:
+        log(f"⚠️ Python編集をスキップ: {str(e)[:100]}")
+
     if stop_event and stop_event.is_set():
         log("⏹ 停止しました"); return
 
@@ -1597,6 +1604,9 @@ def run_pipeline_from_url(url: str, config: dict, log: LOG_CB,
     try:
         if dl_path and Path(dl_path).exists():
             Path(dl_path).unlink()
+        _mid = analysis.get("code_intermediate")
+        if _mid and Path(_mid).exists():
+            Path(_mid).unlink()   # Python編集の中間動画も不要
     except Exception:
         pass
 
@@ -1794,6 +1804,13 @@ def run_pipeline(config: dict, log: LOG_CB,
         analysis["tmpl_config"]  = {}
         analysis["footage_path"] = None
 
+        # Python編集（常時有効・失敗時は従来編集に自動フォールバック）
+        try:
+            import code_edit
+            code_edit.apply_code_edit(model, dl_path, analysis, log, config)
+        except Exception as e:
+            log(f"⚠️ Python編集をスキップ: {str(e)[:100]}")
+
         if stop_event and stop_event.is_set():
             log("⏹ 停止しました"); return
 
@@ -1836,6 +1853,9 @@ def run_pipeline(config: dict, log: LOG_CB,
         try:
             if dl_path and Path(dl_path).exists():
                 Path(dl_path).unlink()
+            _mid = analysis.get("code_intermediate")
+            if _mid and Path(_mid).exists():
+                Path(_mid).unlink()   # Python編集の中間動画も不要
         except Exception:
             pass
 

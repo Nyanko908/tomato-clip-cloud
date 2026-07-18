@@ -855,7 +855,7 @@
   // 編集タブ用：_edHist と同じ長さの説明メタ（何をした状態か・いつか）
   var _edHistMeta = [{ k: "start", label: "", at: Date.now() }];
   // 生成時にAIが行った編集の記録（読み取り専用。get_edit_log で取得）
-  var _edAiLog = null;
+  var _edAiLog = null, _edAiCode = "";
 
   chatUI.openEditor = function (src, title, vid) {
     var app = document.querySelector(".app"), p = document.getElementById("editorPanel");
@@ -870,7 +870,7 @@
       _edCuts = []; _edHist = [[]]; _edHistIdx = 0;   // カットと履歴は素材ごと
       _edHistMeta = [{ k: "start", label: "", at: Date.now() }];
       _edScript = null; _edActiveLine = -1;
-      _edAiLog = null;
+      _edAiLog = null; _edAiCode = "";
       edLoadAiLog();
       edRenderEdits();
       if (v) { v.src = src; v.load(); }
@@ -1260,6 +1260,7 @@
       try { d = typeof d === "string" ? JSON.parse(d) : d; } catch (e) {}
       if (vid !== _edVid) return;
       _edAiLog = (d && d.items) || [];
+      _edAiCode = (d && d.code) || "";
       edRenderEdits();
     }).catch(function () {});
   }
@@ -1273,14 +1274,22 @@
     var html = "";
 
     // ── 生成時のAI編集（読み取り専用）
-    if (_edAiLog && _edAiLog.length) {
+    if ((_edAiLog && _edAiLog.length) || _edAiCode) {
       html += '<div class="ed-hist-sec">🤖 ' + esc(chatUI.t("AIの編集（生成時）")) + "</div>";
-      html += _edAiLog.map(function (it) {
+      html += (_edAiLog || []).map(function (it) {
         var word = chatUI.t(_AI_WORDS[it.k] || it.k);
         return '<div class="ed-hist ai">' +
           '<span class="ic">' + (_AI_ICONS[it.k] || "✂") + "</span>" +
           '<span class="lb">' + esc(word + " " + (it.label || "")) + "</span></div>";
       }).join("");
+      // Python編集モードで生成されたコード：クリックで開閉
+      if (_edAiCode) {
+        html += '<div class="ed-hist ai code" id="edCodeRow">' +
+          '<span class="ic">🐍</span>' +
+          '<span class="lb">' + esc(chatUI.t("Python編集コード")) + "</span>" +
+          '<span class="tm">▾</span></div>' +
+          '<pre class="ed-code" id="edCodeView" style="display:none">' + esc(_edAiCode) + "</pre>";
+      }
     }
 
     // ── あなたの編集（クリックでその時点へ）
@@ -1308,6 +1317,15 @@
       row.addEventListener("click", function () {
         edJumpHist(+row.getAttribute("data-i"));
       });
+    });
+    var codeRow = document.getElementById("edCodeRow");
+    if (codeRow) codeRow.addEventListener("click", function () {
+      var v = document.getElementById("edCodeView");
+      if (!v) return;
+      var open = v.style.display === "none";
+      v.style.display = open ? "" : "none";
+      var tm = codeRow.querySelector(".tm");
+      if (tm) tm.textContent = open ? "▴" : "▾";
     });
     var cur = box.querySelector(".ed-hist.on");
     if (cur) { try { cur.scrollIntoView({ block: "nearest" }); } catch (e) {} }
@@ -1910,7 +1928,7 @@
     "この行をカット", "復元", "書き出し中…", "書き出す",
     "編集履歴はまだありません", "開始", "カット",
     "AIの編集（生成時）", "あなたの編集", "字幕", "早送り", "巻き戻し",
-    "フリーズ", "ズーム", "モノクロ", "反転", "モザイク"];
+    "フリーズ", "ズーム", "モノクロ", "反転", "モザイク", "Python編集コード"];
   function collectI18nKeys() {
     var seen = {};
     ["data-i18n", "data-i18n-ph", "data-i18n-ph-narrow", "data-i18n-title", "data-i18n-prompt"].forEach(function (attr) {

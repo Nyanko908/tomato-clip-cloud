@@ -697,55 +697,69 @@ def run_edit(video_path: str, analysis: dict,
     # 使う直前に tmap.map() で現在のクリップ上の秒数へ直す。
     tmap = TimeMap()
 
-    # カット
-    log("[2/7] 自動カット...")
-    cuts = analysis.get("cut_sections", [])
-    cut = apply_cuts(raw, cuts, log)
-    tmap.add_cuts(cuts)
+    code_mid = analysis.get("code_intermediate")
+    code_used = bool(code_mid and Path(code_mid).exists())
+    if code_used:
+        # ── Python編集モード：AIが書いたコードの実行結果（中間動画）を採用。
+        #    尺を変えた操作はオペログに記録済み → TimeMap を再構築して
+        #    以降の字幕・タイトル配置が自動追従する（固定エフェクトは適用しない）。
+        log("[2/7] Python編集の結果を使用...")
+        raw.close()
+        cut = VideoFileClip(code_mid)
+        from code_edit import rebuild_timemap
+        tmap = rebuild_timemap(analysis.get("code_oplog"))
+        if extend_target > 0:
+            cut = apply_duration_extend(cut, extend_target, extend_method, log=log)
+    else:
+        # カット
+        log("[2/7] 自動カット...")
+        cuts = analysis.get("cut_sections", [])
+        cut = apply_cuts(raw, cuts, log)
+        tmap.add_cuts(cuts)
 
-    # 巻き戻し・フリーズエフェクト
-    rewind_at = analysis.get("rewind_at")
-    freeze_at = analysis.get("freeze_at")
-    freeze_dur = float(analysis.get("freeze_duration", 1.5))
-    ff_at  = analysis.get("fastforward_at")
-    ff_end = analysis.get("fastforward_end")
-    if fastforward_enabled and ff_at is not None and ff_end is not None:
-        s, e = tmap.map(ff_at), tmap.map(ff_end)
-        cut = apply_fastforward(cut, s, e, fastforward_speed, log=log)
-        tmap.add_speed(s, e, fastforward_speed)
-    if rewind_enabled and rewind_at is not None:
-        t = tmap.map(rewind_at)
-        cut = apply_rewind(cut, t, log=log)
-        tmap.add_insert(t - 1.5, 1.5)      # apply_rewind の既定 rewind_dur
-    if freeze_enabled and freeze_at is not None:
-        t = tmap.map(freeze_at)
-        cut = apply_freeze(cut, t, freeze_dur, log=log)
-        tmap.add_insert(t, freeze_dur)
+        # 巻き戻し・フリーズエフェクト
+        rewind_at = analysis.get("rewind_at")
+        freeze_at = analysis.get("freeze_at")
+        freeze_dur = float(analysis.get("freeze_duration", 1.5))
+        ff_at  = analysis.get("fastforward_at")
+        ff_end = analysis.get("fastforward_end")
+        if fastforward_enabled and ff_at is not None and ff_end is not None:
+            s, e = tmap.map(ff_at), tmap.map(ff_end)
+            cut = apply_fastforward(cut, s, e, fastforward_speed, log=log)
+            tmap.add_speed(s, e, fastforward_speed)
+        if rewind_enabled and rewind_at is not None:
+            t = tmap.map(rewind_at)
+            cut = apply_rewind(cut, t, log=log)
+            tmap.add_insert(t - 1.5, 1.5)      # apply_rewind の既定 rewind_dur
+        if freeze_enabled and freeze_at is not None:
+            t = tmap.map(freeze_at)
+            cut = apply_freeze(cut, t, freeze_dur, log=log)
+            tmap.add_insert(t, freeze_dur)
 
-    # 以下は尺を変えないので、写像に足す必要はない（時刻の変換だけ）
-    zoom_at    = analysis.get("zoom_at")
-    zoom_end   = analysis.get("zoom_end")
-    zoom_scale = float(analysis.get("zoom_scale", 1.5))
-    if zoom_enabled and zoom_at is not None and zoom_end is not None:
-        cut = apply_zoom(cut, tmap.map(zoom_at), tmap.map(zoom_end), zoom_scale, log=log)
+        # 以下は尺を変えないので、写像に足す必要はない（時刻の変換だけ）
+        zoom_at    = analysis.get("zoom_at")
+        zoom_end   = analysis.get("zoom_end")
+        zoom_scale = float(analysis.get("zoom_scale", 1.5))
+        if zoom_enabled and zoom_at is not None and zoom_end is not None:
+            cut = apply_zoom(cut, tmap.map(zoom_at), tmap.map(zoom_end), zoom_scale, log=log)
 
-    mono_at  = analysis.get("monochrome_at")
-    mono_end = analysis.get("monochrome_end")
-    if monochrome_enabled and mono_at is not None and mono_end is not None:
-        cut = apply_monochrome(cut, tmap.map(mono_at), tmap.map(mono_end), log=log)
+        mono_at  = analysis.get("monochrome_at")
+        mono_end = analysis.get("monochrome_end")
+        if monochrome_enabled and mono_at is not None and mono_end is not None:
+            cut = apply_monochrome(cut, tmap.map(mono_at), tmap.map(mono_end), log=log)
 
-    flip_at  = analysis.get("flip_at")
-    flip_end = analysis.get("flip_end")
-    if flip_enabled and flip_at is not None and flip_end is not None:
-        cut = apply_flip(cut, tmap.map(flip_at), tmap.map(flip_end), log=log)
+        flip_at  = analysis.get("flip_at")
+        flip_end = analysis.get("flip_end")
+        if flip_enabled and flip_at is not None and flip_end is not None:
+            cut = apply_flip(cut, tmap.map(flip_at), tmap.map(flip_end), log=log)
 
-    mosaic_at  = analysis.get("mosaic_at")
-    mosaic_end = analysis.get("mosaic_end")
-    if mosaic_enabled and mosaic_at is not None and mosaic_end is not None:
-        cut = apply_mosaic(cut, tmap.map(mosaic_at), tmap.map(mosaic_end), log=log)
+        mosaic_at  = analysis.get("mosaic_at")
+        mosaic_end = analysis.get("mosaic_end")
+        if mosaic_enabled and mosaic_at is not None and mosaic_end is not None:
+            cut = apply_mosaic(cut, tmap.map(mosaic_at), tmap.map(mosaic_end), log=log)
 
-    if extend_target > 0:
-        cut = apply_duration_extend(cut, extend_target, extend_method, log=log)
+        if extend_target > 0:
+            cut = apply_duration_extend(cut, extend_target, extend_method, log=log)
 
     # 縦型レイアウト生成
     log("[3/7] 縦型レイアウト生成...")
@@ -881,7 +895,10 @@ def run_edit(video_path: str, analysis: dict,
     if not use_template:
         try:
             _export_fast(
-                cut=cut, src_path=video_path, unmodified=(cut is raw),
+                # Python編集時は中間動画が既にエフェクト適用済み＝直接合成に使える
+                cut=cut,
+                src_path=(code_mid if code_used else video_path),
+                unmodified=(cut is raw) or (code_used and extend_target <= 0),
                 overlays=overlays, caption_times=caption_times,
                 narr_path=narr_path,
                 bgm_path=simple_bgm_path, bgm_volume=simple_bgm_volume,

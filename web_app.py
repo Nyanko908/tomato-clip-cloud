@@ -44,6 +44,8 @@ _DEFAULTS = {
     "output_language": "ja", "monthly_goal": 10, "dev_mode": False,
     # 検索の素性設定: prefer_original(既定・原典優先) / original_only / any
     "source_preference": "prefer_original",
+    # Python編集（AIがコードを書いて編集）。常時有効・障害時の切り戻し用スイッチ
+    "python_edit": True,
 }
 
 
@@ -691,7 +693,7 @@ class Api:
         except Exception:
             meta = {}
         if not meta:
-            return {"items": []}
+            return {"items": [], "code": ""}
         ep = meta.get("edit_params", {}) or {}
 
         def _fmt(s):
@@ -743,7 +745,8 @@ class Api:
         n_caps = len(meta.get("captions") or [])
         if n_caps:
             items.insert(0, {"k": "captions", "t": -1, "label": f"{n_caps}"})
-        return {"items": items}
+        # Python編集で生成されたコード（編集タブでクリック表示）
+        return {"items": items, "code": str(meta.get("edit_code") or "")}
 
     def export_cuts(self, video_id, cuts):
         """
