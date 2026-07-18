@@ -109,6 +109,12 @@ def discover_shorts(youtube_key: str,
         })
         return True
 
+    def _region_locked(item):
+        # regionRestriction.allowed（特定国のみ許可＝例:米国限定）は他国からDLできず、
+        # 採用すると「生成できませんでした」になる（実際に起きた）ので検索段階で弾く。
+        rr = (item.get("contentDetails") or {}).get("regionRestriction") or {}
+        return bool(rr.get("allowed"))
+
     def _get_detail(vid):
         try:
             d = api_get(
@@ -119,9 +125,9 @@ def discover_shorts(youtube_key: str,
             views = int(item.get("statistics", {}).get("viewCount", 0))
             dur   = item.get("contentDetails", {}).get("duration", "PT999S")
             desc  = item.get("snippet", {}).get("description", "")
-            return views, dur, desc
+            return views, dur, desc, _region_locked(item)
         except Exception:
-            return 0, "PT999S", ""
+            return 0, "PT999S", "", False
 
     # ── 優先チャンネル
     for ch in priority_channels[:5]:
@@ -139,8 +145,8 @@ def discover_shorts(youtube_key: str,
                 vid = item["id"].get("videoId")
                 if not vid:
                     continue
-                views, dur, desc = _get_detail(vid)
-                if not (5 <= _parse_duration(dur) <= dur_max):
+                views, dur, desc, locked = _get_detail(vid)
+                if locked or not (5 <= _parse_duration(dur) <= dur_max):
                     continue
                 _add(vid, item["snippet"]["title"], item["snippet"]["channelTitle"],
                      views, item["snippet"]["thumbnails"].get("medium", {}).get("url", ""), True,
@@ -174,6 +180,8 @@ def discover_shorts(youtube_key: str,
                 )
                 for item in d2.get("items", []):
                     vid = item["id"]
+                    if _region_locked(item):
+                        continue
                     dur = item.get("contentDetails", {}).get("duration", "PT999S")
                     if not (5 <= _parse_duration(dur) <= dur_max):
                         continue
@@ -218,6 +226,8 @@ def discover_shorts(youtube_key: str,
                 )
                 for item in d2.get("items", []):
                     vid = item["id"]
+                    if _region_locked(item):
+                        continue
                     dur = item.get("contentDetails", {}).get("duration", "PT999S")
                     if not (5 <= _parse_duration(dur) <= dur_max):
                         continue
@@ -243,6 +253,8 @@ def discover_shorts(youtube_key: str,
                 data = api_get(f"https://www.googleapis.com/youtube/v3/videos?{p}")
                 for item in data.get("items", []):
                     vid = item["id"]
+                    if _region_locked(item):
+                        continue
                     dur = item.get("contentDetails", {}).get("duration", "PT999S")
                     if not (5 <= _parse_duration(dur) <= dur_max):
                         continue
@@ -1749,18 +1761,24 @@ def run_pipeline(config: dict, log: LOG_CB,
     videos = score_videos(model, videos, log, gemini_rot=gemini_rot,
                           source_preference=config.get("source_preference", "prefer_original"))
 
-    targets = [v for v in videos if v["score"] >= 60][:1]
+    # 上位候補を予備込みで持つ。DLできない動画（国限定公開・削除・ライブ等）を
+    # 引いたら次点で再挑戦する（以前は候補1本だけだったので、その1本が
+    # 米国限定だと即「生成できませんでした」になっていた＝実際に起きた）。
+    targets = [v for v in videos if v["score"] >= 60][:5]
     if not targets:
         log("⚠️ スコア60以上なし → 上位動画を強制採用")
-        targets = videos[:1]
+        targets = videos[:5]
     if not targets:
         log("⚠️ 採用動画なし"); return
+    want, made = 1, 0
 
-    log(f"\n📋 処理予定: {len(targets)} 本")
+    log(f"\n📋 採用候補: {len(targets)} 本（1本完成で終了・DL不可なら次点へ）")
     for v in targets:
         log(f"   • {v['title'][:35]} (スコア:{v['score']} / {'⭐優先' if v.get('priority') else '📡トレンド'})")
 
     for i, video in enumerate(targets):
+        if made >= want:
+            break
         if stop_event and stop_event.is_set():
             log("⏹ 停止しました"); return
 
@@ -1777,7 +1795,7 @@ def run_pipeline(config: dict, log: LOG_CB,
                                  start=_seg[0] if _seg else None,
                                  end=_seg[1] if _seg else None)
         if not dl_path:
-            log("❌ DL失敗 → スキップ")
+            log("❌ DL失敗（国限定公開・削除・ライブ等）→ 次の候補で再挑戦します")
             continue
 
         if stop_event and stop_event.is_set():
@@ -1872,6 +1890,8 @@ def run_pipeline(config: dict, log: LOG_CB,
             meta        = analysis
         )
 
+        made += 1   # 1本完成（以降の候補は予備だったので使わない）
+
         if on_video_ready:
             on_video_ready(out_path, analysis)
 
@@ -1920,8 +1940,8 @@ def run_pipeline(config: dict, log: LOG_CB,
             log("⚠️ YouTube認証なし → スキップ")
             log(f"   完成動画: {out_path}")
 
-        log(f"\n✅ [{i+1}/{len(targets)}] 完了！")
-        if i < len(targets) - 1:
+        log(f"\n✅ 完了！（候補 {i+1}/{len(targets)} 本目で成功）")
+        if made < want and i < len(targets) - 1:
             log(f"   次の動画まで {SLEEP}秒 待機...")
             time.sleep(SLEEP)
 
