@@ -208,6 +208,19 @@
     opacity:0;transition:opacity .12s;}
   .ed-line:hover .del,.ed-line.cut .del{opacity:1;}
   .ed-line .del:hover{color:var(--tomato);background:rgba(226,74,42,.1);}
+  /* 編集タブ：編集履歴（リアルタイム）。行クリックでその時点の状態にジャンプ */
+  .ed-edits{flex:1;overflow-y:auto;padding:6px 8px 12px;}
+  .ed-hist{display:flex;gap:8px;align-items:center;padding:7px 8px;border-radius:8px;
+    cursor:pointer;border-left:2px solid transparent;}
+  .ed-hist:hover{background:var(--panel);}
+  .ed-hist.on{background:rgba(226,74,42,.08);border-left-color:var(--tomato);}
+  .ed-hist.future{opacity:.45;}   /* 現在より先＝やり直すで戻れる未来の状態 */
+  .ed-hist .ic{flex:0 0 18px;text-align:center;font-size:12px;}
+  .ed-hist .lb{flex:1;font-size:12px;color:var(--ink);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+  .ed-hist .tm{flex:0 0 auto;font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;}
+  .ed-edits .ed-empty{padding:22px 6px;}
+
   .btn.primary:disabled{opacity:.45;cursor:default;}
   .btn.primary:disabled:hover{background:var(--tomato);}
   .toolbtn:disabled{opacity:.35;cursor:default;}
@@ -799,6 +812,7 @@
           <button class="ed-tab on" data-tab="assets" data-i18n="素材">素材</button>
           <button class="ed-tab" data-tab="library" data-i18n="ライブラリ">ライブラリ</button>
           <button class="ed-tab" data-tab="script" data-i18n="台本">台本</button>
+          <button class="ed-tab" data-tab="edits" data-i18n="編集">編集</button>
         </div>
         <div class="ed-search">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
@@ -807,6 +821,7 @@
         <div class="ed-assets" id="edAssets"></div>
         <div class="ed-assets" id="edLibrary" style="display:none"></div>
         <div class="ed-script" id="edScript" style="display:none"></div>
+        <div class="ed-edits" id="edEdits" style="display:none"></div>
       </div>
 
       <div class="ed-viewer">
