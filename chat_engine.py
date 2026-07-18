@@ -296,8 +296,12 @@ class ChatEngine:
             else:
                 self._emit("on_progress_done", pid, "完成しました 🎉")
                 path, analysis = produced["last"]
+                # id = 出力ファイル名 output_<YouTube動画ID>.mp4 から復元。
+                # エディタの台本タブ(get_transcript)が字幕取得に使う。
+                _stem = Path(path or "").stem
                 self._emit("on_video", {
                     "path": path,
+                    "id": _stem[7:] if _stem.startswith("output_") else "",
                     "title": analysis.get("title", "完成した動画"),
                     "subtitle": analysis.get("subtitle", ""),
                 })

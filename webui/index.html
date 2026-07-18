@@ -192,6 +192,26 @@
   .ed-asset.on .thumb{outline:2px solid var(--tomato);outline-offset:1px;}
   .ed-empty{grid-column:1/-1;color:var(--faint);font-size:12.5px;text-align:center;padding:22px 6px;}
 
+  /* 台本タブ（ChatCut風・文字起こしベース編集）。行クリック=シーク、✕=カット */
+  .ed-script{flex:1;overflow-y:auto;padding:4px 6px 12px;}
+  .ed-line{display:flex;gap:7px;align-items:flex-start;padding:6px 6px;border-radius:8px;
+    cursor:pointer;}
+  .ed-line:hover{background:var(--panel);}
+  .ed-line.active{background:rgba(226,74,42,.08);}
+  .ed-line .tc{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--tomato);
+    font-variant-numeric:tabular-nums;padding-top:2px;}
+  .ed-line .tx{flex:1;font-size:12.5px;line-height:1.55;color:var(--ink);min-width:0;}
+  .ed-line.cut .tx,.ed-line.gone .tx{text-decoration:line-through;color:var(--faint);}
+  .ed-line.cut .tc,.ed-line.gone .tc{color:var(--faint);}
+  .ed-line .del{flex:0 0 auto;border:none;background:none;color:var(--faint);cursor:pointer;
+    font:inherit;font-size:12px;line-height:1;padding:3px 5px;border-radius:5px;
+    opacity:0;transition:opacity .12s;}
+  .ed-line:hover .del,.ed-line.cut .del{opacity:1;}
+  .ed-line .del:hover{color:var(--tomato);background:rgba(226,74,42,.1);}
+  .btn.primary:disabled{opacity:.45;cursor:default;}
+  .btn.primary:disabled:hover{background:var(--tomato);}
+  .toolbtn:disabled{opacity:.35;cursor:default;}
+
   /* 右：ビューア */
   .ed-viewer{flex:1;display:flex;align-items:center;justify-content:center;min-width:0;
     background:var(--panel);padding:18px;}
@@ -785,6 +805,8 @@
           <input type="text" id="edSearch" data-i18n-ph="検索" placeholder="検索">
         </div>
         <div class="ed-assets" id="edAssets"></div>
+        <div class="ed-assets" id="edLibrary" style="display:none"></div>
+        <div class="ed-script" id="edScript" style="display:none"></div>
       </div>
 
       <div class="ed-viewer">

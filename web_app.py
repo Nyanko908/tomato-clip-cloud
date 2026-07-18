@@ -552,6 +552,217 @@ class Api:
             return []
         return out
 
+    # ── 台本（ChatCut風・文字起こしベース編集） ──
+    def get_transcript(self, video_id):
+        """
+        生成済み動画の台本（時刻つき字幕）を返す。字幕は YouTube ソースから取る
+        （highlights.fetch_transcript 再利用。ローカル素材にはASRが無いため）。
+
+        エディタが再生するのは「編集後の出力動画」で、ソース字幕とは時間軸がズレる。
+        ここで (1)区間DLのオフセット segment_start → (2)編集の TimeMap の順に写像し、
+        出力動画上の秒数 o/o2 を付けて返す＝UIは o にシークするだけでよい。
+        {"lines":[{"s":元動画秒, "o":出力開始秒, "o2":出力終了秒, "text":…, "gone":AIカット済み}]}
+        """
+        import re
+        video_id = str(video_id or "")
+        if not hasattr(self, "_tr_cache"):
+            self._tr_cache = {}
+        if video_id in self._tr_cache:
+            return self._tr_cache[video_id]
+
+        meta = {}
+        try:
+            import db
+            db.init_db()
+            row = db.get_conn().execute(
+                "SELECT meta_json FROM videos WHERE id=?", (video_id,)).fetchone()
+            if row:
+                meta = json.loads(row["meta_json"] or "{}")
+        except Exception:
+            meta = {}
+        if not re.match(r"^[A-Za-z0-9_-]{11}$", video_id):
+            return {"error": "この動画には台本がありません（YouTube由来の動画のみ）"}
+
+        import highlights
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        info = highlights.fetch_video_meta(url, lambda m: None)
+        raw = highlights.fetch_transcript(info, lambda m: None)
+        if not raw:
+            return {"error": "この動画の字幕を取得できませんでした"}
+        dur = float(info.get("duration") or 0)
+
+        # 自動字幕は細切れ＆繰り返しが多いので、数秒ごとの「行」に統合する。
+        # 各行の終わり＝次の行の始まり（#37 のカット区間にそのまま使う）。
+        bucket = 6.0
+        lines, cur_t, cur_txt = [], None, []
+        for t, txt in raw:
+            if cur_t is None:
+                cur_t, cur_txt = t, [txt]
+            elif t - cur_t >= bucket:
+                lines.append([cur_t, t, " ".join(cur_txt)])
+                cur_t, cur_txt = t, [txt]
+            else:
+                cur_txt.append(txt)
+        if cur_t is not None:
+            end = min(cur_t + bucket, dur) if dur else cur_t + bucket
+            lines.append([cur_t, max(end, cur_t + 0.5), " ".join(cur_txt)])
+
+        # 区間DLのオフセット（無ければ全体DL＝0）と、編集の時間写像
+        seg_s = float(meta.get("segment_start") or 0.0)
+        seg_e = meta.get("segment_end")
+        seg_e = float(seg_e) if seg_e is not None else (dur or None)
+        try:
+            tmap, cut_list = self._build_timemap(meta)
+        except Exception:
+            from editor import TimeMap
+            tmap, cut_list = TimeMap(), []
+
+        out_lines = []
+        for t0, t1, text in lines:
+            if t1 <= seg_s or (seg_e is not None and t0 >= seg_e):
+                continue          # 切り抜きに使っていない部分は出さない
+            r0 = max(0.0, t0 - seg_s)
+            r1 = max(r0, (min(t1, seg_e) if seg_e is not None else t1) - seg_s)
+            gone = any(s <= r0 and r1 <= e for s, e in cut_list)   # 生成時にAIがカット済み
+            out_lines.append({
+                "s": round(t0, 2),
+                "o": round(tmap.map(r0), 2),
+                "o2": round(tmap.map(r1), 2),
+                "text": text,
+                "gone": bool(gone),
+            })
+        res = {"lines": out_lines}
+        if out_lines:
+            self._tr_cache[video_id] = res
+        return res
+
+    @staticmethod
+    def _build_timemap(meta):
+        """editor.run_edit と同じ順序・同じ規則で TimeMap を再構築する。
+        （クリップ上の秒 → 出力動画上の秒。run_edit 側を変えたらここも合わせる）"""
+        from editor import TimeMap
+        ep = meta.get("edit_params", {}) or {}
+        tmap = TimeMap()
+        cuts = meta.get("cut_sections") or []
+        cut_list = []
+        for c in cuts:
+            try:
+                s, e = float(c["start"]), float(c["end"])
+                if e > s:
+                    cut_list.append((s, e))
+            except Exception:
+                pass
+        tmap.add_cuts([{"start": s, "end": e} for s, e in cut_list])
+        ff_at, ff_end = meta.get("fastforward_at"), meta.get("fastforward_end")
+        if ep.get("fastforward_enabled", True) and ff_at is not None and ff_end is not None:
+            s, e = tmap.map(ff_at), tmap.map(ff_end)
+            tmap.add_speed(s, e, float(ep.get("fastforward_speed", 2.0)))
+        rw = meta.get("rewind_at")
+        if ep.get("rewind_enabled", True) and rw is not None:
+            tmap.add_insert(tmap.map(rw) - 1.5, 1.5)   # apply_rewind の既定 rewind_dur
+        fz = meta.get("freeze_at")
+        if ep.get("freeze_enabled", True) and fz is not None:
+            tmap.add_insert(tmap.map(fz), float(meta.get("freeze_duration", 1.5)))
+        return tmap, cut_list
+
+    def export_cuts(self, video_id, cuts):
+        """
+        台本編集で消した区間（出力動画上の秒）を出力動画から取り除いて書き出す(#37)。
+        出力動画は字幕・演出が焼き込み済みなので、映像を切るだけで全部一緒に消える。
+        完了は非同期：完成カード(addVideoCard)＋ exportDone(ok, path) をUIへ送る。
+        """
+        try:
+            import db
+            db.init_db()
+            row = db.get_conn().execute(
+                "SELECT title, output_path FROM videos WHERE id=?",
+                (str(video_id),)).fetchone()
+        except Exception:
+            row = None
+        if not row or not row["output_path"] or not os.path.exists(row["output_path"]):
+            return {"error": "元の動画ファイルが見つかりません"}
+        try:
+            ranges = sorted((max(0.0, float(c["s"])), float(c["e"]))
+                            for c in (cuts or []) if float(c["e"]) > float(c["s"]))
+        except Exception:
+            ranges = []
+        if not ranges:
+            return {"error": "カットする行がありません"}
+        src, title = row["output_path"], row["title"] or "動画"
+
+        def _work():
+            out = self._run_export(src, ranges)
+            if out:
+                self._on_ai_video({"path": out, "id": "",
+                                   "title": f"{title}（編集版）",
+                                   "subtitle": "台本編集のカットを適用しました"})
+                self._js("exportDone", True, out)
+            else:
+                self._js("exportDone", False, "")
+                self._js("addError", "書き出しに失敗しました")
+        threading.Thread(target=_work, daemon=True).start()
+        return {"ok": True}
+
+    @staticmethod
+    def _run_export(src, ranges):
+        """ranges を取り除いた動画を src の隣に書き出してパスを返す（失敗は None）。"""
+        import re, time, subprocess
+        from pipeline import _get_ffmpeg_exe
+        ff = _get_ffmpeg_exe()
+        if not ff:
+            return None
+        # 元動画の尺（ffprobe は同梱されないので ffmpeg -i のログから読む）
+        dur = None
+        try:
+            r = subprocess.run([ff, "-hide_banner", "-i", src],
+                               capture_output=True, timeout=60)
+            m = re.search(rb"Duration: (\d+):(\d+):(\d+\.?\d*)", r.stderr)
+            if m:
+                dur = (int(m.group(1)) * 3600 + int(m.group(2)) * 60
+                       + float(m.group(3)))
+        except Exception:
+            pass
+        # 重なるカットをマージ → 「残す区間」を組み立てる
+        merged = []
+        for s, e in ranges:
+            if merged and s <= merged[-1][1] + 0.01:
+                merged[-1][1] = max(merged[-1][1], e)
+            else:
+                merged.append([s, e])
+        keeps, prev = [], 0.0
+        for s, e in merged:
+            if dur is not None:
+                s, e = min(s, dur), min(e, dur)
+            if s > prev + 0.05:
+                keeps.append((prev, s))
+            prev = max(prev, e)
+        if dur is None or prev < dur - 0.05:
+            keeps.append((prev, dur))   # dur 不明なら末尾まで(end 指定なし)
+        if not keeps:
+            return None
+        parts, refs = [], []
+        for i, (s, e) in enumerate(keeps):
+            end_v = f":end={e:.3f}" if e is not None else ""
+            parts.append(f"[0:v]trim=start={s:.3f}{end_v},setpts=PTS-STARTPTS[v{i}]")
+            parts.append(f"[0:a]atrim=start={s:.3f}{end_v},asetpts=PTS-STARTPTS[a{i}]")
+            refs.append(f"[v{i}][a{i}]")
+        fc = (";".join(parts) + ";" + "".join(refs)
+              + f"concat=n={len(keeps)}:v=1:a=1[vo][ao]")
+        p = Path(src)
+        dst = str(p.with_name(f"{p.stem}_cut{int(time.time()) % 100000}.mp4"))
+        try:
+            r = subprocess.run(
+                [ff, "-y", "-hide_banner", "-loglevel", "error", "-i", src,
+                 "-filter_complex", fc, "-map", "[vo]", "-map", "[ao]",
+                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                 "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", dst],
+                capture_output=True, timeout=1800)
+            if r.returncode == 0 and os.path.exists(dst):
+                return dst
+        except Exception:
+            pass
+        return None
+
     @staticmethod
     def _task_prompt(t) -> str:
         """タスクから実行するプロンプトを取り出す。旧 pipeline_batch は文章に変換。"""

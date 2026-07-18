@@ -1419,6 +1419,10 @@ def run_pipeline_from_url(url: str, config: dict, log: LOG_CB,
                              chat_context=config.get("chat_context", ""),
                              output_lang=output_lang)
     analysis["output_language"] = output_lang
+    if seg:
+        # 区間DLのオフセット。台本編集(get_transcript)がソース字幕と
+        # 出力動画の時間軸を対応付けるのに使う。
+        analysis["segment_start"], analysis["segment_end"] = seg
     log(f"   ✅ タイトル: {analysis.get('title')}")
     log(f"   ✅ 字幕: {len(analysis.get('captions',[]))} 件")
     log(f"   ✅ カット: {len(analysis.get('cut_sections',[]))} 箇所")
@@ -1654,6 +1658,8 @@ def run_pipeline(config: dict, log: LOG_CB,
                                  chat_context=config.get("chat_context", ""),
                                  output_lang=output_lang)
         analysis["output_language"] = output_lang
+        if _seg:
+            analysis["segment_start"], analysis["segment_end"] = _seg
         if output_lang == "ja" and video.get("title_jp"):
             analysis.setdefault("title", video["title_jp"])
 

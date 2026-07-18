@@ -2944,3 +2944,21 @@ _NEW_UI3 = {
 for _ja, _tr in _NEW_UI3.items():
     for _lang, _val in _tr.items():
         _STRINGS.setdefault(_lang, {})[_ja] = _val
+
+
+# -- 新UI 動画エディタ（台本編集）タブの文字列（12言語） --
+_NEW_UI4 = {
+    "素材": {"en": "Media", "es": "Medios", "pt": "Mídia", "de": "Medien", "fr": "Médias", "id": "Media", "hi": "मीडिया", "ko": "소재", "it": "Media", "tr": "Medya", "nl": "Media"},
+    "台本": {"en": "Script", "es": "Guion", "pt": "Roteiro", "de": "Skript", "fr": "Script", "id": "Naskah", "hi": "स्क्रिप्ट", "ko": "대본", "it": "Copione", "tr": "Senaryo", "nl": "Script"},
+    "書き出す": {"en": "Export", "es": "Exportar", "pt": "Exportar", "de": "Exportieren", "fr": "Exporter", "id": "Ekspor", "hi": "एक्सपोर्ट", "ko": "내보내기", "it": "Esporta", "tr": "Dışa aktar", "nl": "Exporteren"},
+    "書き出し中…": {"en": "Exporting…", "es": "Exportando…", "pt": "Exportando…", "de": "Wird exportiert…", "fr": "Export en cours…", "id": "Mengekspor…", "hi": "एक्सपोर्ट हो रहा है…", "ko": "내보내는 중…", "it": "Esportazione…", "tr": "Dışa aktarılıyor…", "nl": "Exporteren…"},
+    "台本を取得しています…": {"en": "Loading transcript…", "es": "Cargando la transcripción…", "pt": "Carregando a transcrição…", "de": "Transkript wird geladen…", "fr": "Chargement de la transcription…", "id": "Memuat transkrip…", "hi": "ट्रांसक्रिप्ट लोड हो रहा है…", "ko": "대본을 불러오는 중…", "it": "Caricamento trascrizione…", "tr": "Transkript yükleniyor…", "nl": "Transcript laden…"},
+    "台本を取得できませんでした": {"en": "Couldn't load the transcript", "es": "No se pudo cargar la transcripción", "pt": "Não foi possível carregar a transcrição", "de": "Transkript konnte nicht geladen werden", "fr": "Impossible de charger la transcription", "id": "Tidak dapat memuat transkrip", "hi": "ट्रांसक्रिप्ट लोड नहीं हो सका", "ko": "대본을 불러오지 못했습니다", "it": "Impossibile caricare la trascrizione", "tr": "Transkript yüklenemedi", "nl": "Kon het transcript niet laden"},
+    "この動画には台本がありません（YouTube由来の動画のみ）": {"en": "No script for this video (YouTube sources only)", "es": "Este video no tiene guion (solo fuentes de YouTube)", "pt": "Este vídeo não tem roteiro (apenas fontes do YouTube)", "de": "Kein Skript für dieses Video (nur YouTube-Quellen)", "fr": "Pas de script pour cette vidéo (sources YouTube uniquement)", "id": "Tidak ada naskah untuk video ini (hanya sumber YouTube)", "hi": "इस वीडियो के लिए कोई स्क्रिप्ट नहीं (केवल YouTube स्रोत)", "ko": "이 동영상에는 대본이 없습니다 (YouTube 소스만 지원)", "it": "Nessun copione per questo video (solo fonti YouTube)", "tr": "Bu video için senaryo yok (yalnızca YouTube kaynakları)", "nl": "Geen script voor deze video (alleen YouTube-bronnen)"},
+    "ライブラリ機能は近日公開": {"en": "Library coming soon", "es": "Biblioteca próximamente", "pt": "Biblioteca em breve", "de": "Bibliothek demnächst", "fr": "Bibliothèque bientôt disponible", "id": "Pustaka segera hadir", "hi": "लाइब्रेरी जल्द आ रही है", "ko": "라이브러리 기능은 곧 제공됩니다", "it": "Libreria in arrivo", "tr": "Kitaplık yakında", "nl": "Bibliotheek binnenkort"},
+    "この行をカット": {"en": "Cut this line", "es": "Cortar esta línea", "pt": "Cortar esta linha", "de": "Diese Zeile schneiden", "fr": "Couper cette ligne", "id": "Potong baris ini", "hi": "यह पंक्ति काटें", "ko": "이 줄 잘라내기", "it": "Taglia questa riga", "tr": "Bu satırı kes", "nl": "Deze regel knippen"},
+    "復元": {"en": "Restore", "es": "Restaurar", "pt": "Restaurar", "de": "Wiederherstellen", "fr": "Restaurer", "id": "Pulihkan", "hi": "बहाल करें", "ko": "복원", "it": "Ripristina", "tr": "Geri al", "nl": "Herstellen"},
+}
+for _ja, _tr in _NEW_UI4.items():
+    for _lang, _val in _tr.items():
+        _STRINGS.setdefault(_lang, {})[_ja] = _val

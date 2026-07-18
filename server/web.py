@@ -71,6 +71,18 @@ class CloudApi(web_app.Api):
             return str(cloudcfg.output_root() / url[len("/media/"):])
         return url
 
+    def list_videos(self, limit=60):
+        """エディタの素材レール：サーバー上のパスはブラウザで開けないので /media URL に直す。"""
+        out = []
+        for v in super().list_videos(limit):
+            url = self._media_url(v.get("path", ""))
+            if not url:
+                continue          # 配信できない場所のファイルは出さない
+            v = dict(v)
+            v["path"] = url
+            out.append(v)
+        return out
+
     def _on_video(self, d):
         try:
             d = d if isinstance(d, dict) else json.loads(d)
@@ -81,6 +93,14 @@ class CloudApi(web_app.Api):
         if url:
             out["path"] = url
         self._js("addVideoCard", out)
+
+    def _on_ai_video(self, d):
+        """export_cuts(台本編集の書き出し)経由のカードも配信URLに直してから流す。"""
+        d = dict(d or {})
+        url = self._media_url(d.get("path", ""))
+        if url:
+            d["path"] = url
+        super()._on_ai_video(d)
 
     # ---- クラウド向けオーバーライド ----
     def open_file(self, path):
@@ -124,7 +144,7 @@ _ALLOWED = {
     "list_conversations", "load_conversation", "delete_conversation", "search_conversations",
     "get_stats", "get_youtube_dashboard",
     "list_schedule", "add_schedule", "reschedule", "cancel_schedule",
-    "update_schedule_prompt",
+    "update_schedule_prompt", "list_videos", "get_transcript", "export_cuts",
     "cloud_get_state", "cloud_make_bundle", "cloud_save_url", "cloud_test", "cloud_launch_setup",
     "account_state", "account_login", "account_logout", "cloud_push_settings", "account_token",
     "cloud_server_state",

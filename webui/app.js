@@ -259,7 +259,7 @@
         "</div></div></div></div>";
       var eb = d.querySelector("[data-edit]");
       if (eb) eb.addEventListener("click", function () {
-        chatUI.openEditor(src, v.title || chatUI.t("完成した動画"));
+        chatUI.openEditor(src, v.title || chatUI.t("完成した動画"), v.id || "");
       });
       el.thread.appendChild(d); scrollBottom();
     },
@@ -849,8 +849,11 @@
   // ================= 動画エディタ（右からスライドイン） =================
   // 開閉は transform だけを動かす（.app に editor-open を付けるとCSSがスライドさせる）。
   var _edSrc = null, _edPxPerSec = 120, _edRaf = null, _edFitPending = true;
+  // 台本編集（#36/#37）：現在の素材の動画ID・ユーザーが消した行のカット区間・履歴
+  var _edVid = null, _edCuts = [], _edHist = [[]], _edHistIdx = 0,
+      _edScript = null, _edTab = "assets", _edActiveLine = -1, _edExporting = false;
 
-  chatUI.openEditor = function (src, title) {
+  chatUI.openEditor = function (src, title, vid) {
     var app = document.querySelector(".app"), p = document.getElementById("editorPanel");
     if (!app || !p) return;
     var v = document.getElementById("edVideo");
@@ -858,12 +861,19 @@
     if (title && t) t.textContent = title;
     if (src && src !== _edSrc) {
       _edSrc = src;
+      _edVid = vid || null;
       _edFitPending = true;      // 新しい素材は全体が見える倍率で開く
+      _edCuts = []; _edHist = [[]]; _edHistIdx = 0;   // カットと履歴は素材ごと
+      _edScript = null; _edActiveLine = -1;
       if (v) { v.src = src; v.load(); }
+      if (_edTab === "script") edLoadScript(true);
+    } else if (vid && !_edVid) {
+      _edVid = vid;
     }
     p.setAttribute("aria-hidden", "false");
     app.classList.add("editor-open");
     edBuildAssets();
+    edUpdateButtons();
     // メタデータが来てから尺に合わせて目盛りとクリップを描く
     if (v && v.readyState >= 1) edRebuild();
   };
@@ -889,7 +899,7 @@
   // 素材全体がタイムラインの幅に収まる拡大率。開くたびに全体が見える。
   function edFitZoom() {
     var wrap = document.getElementById("edTrackWrap");
-    var dur = edDur();
+    var dur = edDispDur() || edDur();
     if (!wrap || !dur) return 120;
     var avail = Math.max(200, wrap.clientWidth - 42 - 20);
     return Math.min(400, Math.max(2, avail / dur));
@@ -899,6 +909,45 @@
     return (v && isFinite(v.duration) && v.duration > 0) ? v.duration : 0;
   }
 
+  // ---- カット区間（#37）と表示時間の写像 ----
+  // タイムラインは「カットを取り除いて詰めた姿」（リップル表示）で描く。
+  // 動画要素は元ファイルのままなので、実時刻⇄表示時刻の変換を常に通す。
+  function edCutRanges() {
+    var dur = edDur();
+    var rs = _edCuts
+      .map(function (c) { return [Math.max(0, c.s), dur ? Math.min(dur, c.e) : c.e]; })
+      .filter(function (r) { return r[1] > r[0]; })
+      .sort(function (a, b) { return a[0] - b[0]; });
+    var m = [];
+    rs.forEach(function (r) {
+      if (m.length && r[0] <= m[m.length - 1][1] + 0.01) {
+        m[m.length - 1][1] = Math.max(m[m.length - 1][1], r[1]);
+      } else m.push([r[0], r[1]]);
+    });
+    return m;
+  }
+  function edDispDur() {
+    var dur = edDur(), cut = 0;
+    edCutRanges().forEach(function (r) { cut += r[1] - r[0]; });
+    return Math.max(0, dur - cut);
+  }
+  function edDispT(t) {          // 動画の実時刻 → タイムライン表示時刻
+    var shift = 0, rs = edCutRanges();
+    for (var i = 0; i < rs.length; i++) {
+      if (t >= rs[i][1]) shift += rs[i][1] - rs[i][0];
+      else if (t > rs[i][0]) return rs[i][0] - shift;   // カット中は入口に寄せる
+    }
+    return t - shift;
+  }
+  function edSrcT(d) {           // タイムライン表示時刻 → 動画の実時刻
+    var rs = edCutRanges(), t = d;
+    for (var i = 0; i < rs.length; i++) {
+      if (t >= rs[i][0]) t += rs[i][1] - rs[i][0];
+      else break;
+    }
+    return t;
+  }
+
   // 目盛りの間隔は、拡大率に応じて「切りのいい秒数」を選ぶ
   function edTickStep() {
     var cands = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
@@ -906,7 +955,7 @@
     return 900;
   }
   function edRebuild() {
-    var dur = edDur();
+    var dur = edDur(), dispDur = edDispDur();
     var ruler = document.getElementById("edRuler");
     var laneV = document.getElementById("edLaneV"), laneA = document.getElementById("edLaneA");
     if (!ruler || !laneV || !laneA) return;
@@ -916,10 +965,10 @@
       var z = document.getElementById("edZoom");
       if (z) z.value = Math.round(_edPxPerSec);
     }
-    var w = Math.max(dur * _edPxPerSec, 10);
+    var w = Math.max(dispDur * _edPxPerSec, 10);
 
     var step = edTickStep(), html = "";
-    for (var t = 0; t <= dur + 0.001; t += step) {
+    for (var t = 0; t <= dispDur + 0.001; t += step) {
       html += '<span class="tick" style="left:' + (t * _edPxPerSec + 42) + 'px">' + edFmtRuler(t) + "</span>";
     }
     ruler.innerHTML = html;
@@ -927,22 +976,50 @@
     var tracks = document.getElementById("edTracks");
     if (tracks) tracks.style.width = (w + 60) + "px";
 
-    // 今は素材まるごと1クリップ。カット編集はここに増やしていく。
-    laneV.innerHTML = '<div class="ed-clip v" style="left:0;width:' + w + 'px">' +
-      '<span class="cliplbl">' + esc(chatUI.t("動画")) + "</span></div>";
-    laneA.innerHTML = '<div class="ed-clip a" style="left:0;width:' + w + 'px">' +
-      '<span class="cliplbl">' + esc(chatUI.t("音声")) + "</span></div>";
+    // 台本で行を消すとクリップが分割される：カットを除いた「残す区間」を
+    // 隙間を詰めて並べる（リップル表示）。カットが無ければ素材まるごと1クリップ。
+    var rs = edCutRanges(), keeps = [], prev = 0;
+    rs.forEach(function (r) {
+      if (r[0] > prev + 0.01) keeps.push([prev, r[0]]);
+      prev = r[1];
+    });
+    if (dur - prev > 0.01 || !keeps.length) keeps.push([prev, Math.max(dur, prev)]);
+    var vh = "", ah = "", x = 0;
+    keeps.forEach(function (k, i) {
+      var cw = Math.max(2, (k[1] - k[0]) * _edPxPerSec - (i < keeps.length - 1 ? 2 : 0));
+      var lblV = i === 0 ? '<span class="cliplbl">' + esc(chatUI.t("動画")) + "</span>" : "";
+      var lblA = i === 0 ? '<span class="cliplbl">' + esc(chatUI.t("音声")) + "</span>" : "";
+      vh += '<div class="ed-clip v" style="left:' + x + 'px;width:' + cw + 'px">' + lblV + "</div>";
+      ah += '<div class="ed-clip a" style="left:' + x + 'px;width:' + cw + 'px">' + lblA + "</div>";
+      x += (k[1] - k[0]) * _edPxPerSec;
+    });
+    laneV.innerHTML = vh;
+    laneA.innerHTML = ah;
     edMovePlayhead();
   }
   function edMovePlayhead() {
     var v = document.getElementById("edVideo"), ph = document.getElementById("edPlayhead");
     var lab = document.getElementById("edTime");
     if (!v || !ph) return;
-    ph.style.left = (42 + (v.currentTime || 0) * _edPxPerSec) + "px";
-    if (lab) lab.textContent = edFmt(v.currentTime);
+    var d = edDispT(v.currentTime || 0);
+    ph.style.left = (42 + d * _edPxPerSec) + "px";
+    if (lab) lab.textContent = edFmt(d);
   }
   function edTick() {
+    // 再生中にカット区間へ入ったら飛ばす（＝消した行は再生されない）
+    var v = document.getElementById("edVideo");
+    if (v && !v.paused) {
+      var rs = edCutRanges(), t = v.currentTime;
+      for (var i = 0; i < rs.length; i++) {
+        if (t >= rs[i][0] - 0.02 && t < rs[i][1]) {
+          if (rs[i][1] >= edDur() - 0.05) { v.pause(); v.currentTime = rs[i][0]; }
+          else v.currentTime = rs[i][1] + 0.01;
+          break;
+        }
+      }
+    }
     edMovePlayhead();
+    edSyncActiveLine();
     _edRaf = requestAnimationFrame(edTick);
   }
   function edStartTick() { if (!_edRaf) _edRaf = requestAnimationFrame(edTick); }
@@ -970,7 +1047,8 @@
     box.innerHTML = list.map(function (v) {
       var raw = String(v.path || "").replace(/\\/g, "/");
       var src = (/^(https?:)?\/\//.test(raw) || raw.charAt(0) === "/") ? raw : "file:///" + raw;
-      return '<div class="ed-asset" data-src="' + esc(src) + '" data-title="' + esc(v.title || "") + '">' +
+      return '<div class="ed-asset" data-src="' + esc(src) + '" data-title="' + esc(v.title || "") +
+        '" data-vid="' + esc(v.id || "") + '">' +
         '<div class="thumb"><video src="' + esc(src) + '" preload="metadata" muted></video></div>' +
         '<div class="nm">' + esc(v.title || "動画") + "</div></div>";
     }).join("");
@@ -978,10 +1056,208 @@
       el2.addEventListener("click", function () {
         box.querySelectorAll(".ed-asset").forEach(function (x) { x.classList.remove("on"); });
         this.classList.add("on");
-        chatUI.openEditor(this.getAttribute("data-src"), this.getAttribute("data-title"));
+        chatUI.openEditor(this.getAttribute("data-src"), this.getAttribute("data-title"),
+                          this.getAttribute("data-vid"));
       });
     });
+    edApplySearch();
   }
+
+  // ---- 左レールのタブ（素材 / ライブラリ / 台本） ----
+  function edSetTab(name) {
+    _edTab = name;
+    document.querySelectorAll(".ed-tab").forEach(function (b) {
+      b.classList.toggle("on", b.getAttribute("data-tab") === name);
+    });
+    var panes = { assets: "edAssets", library: "edLibrary", script: "edScript" };
+    Object.keys(panes).forEach(function (k) {
+      var n = document.getElementById(panes[k]);
+      if (n) n.style.display = (k === name) ? "" : "none";
+    });
+    if (name === "library") {
+      var lb = document.getElementById("edLibrary");
+      if (lb) lb.innerHTML = '<div class="ed-empty">' + esc(chatUI.t("ライブラリ機能は近日公開")) + "</div>";
+    }
+    if (name === "script") edLoadScript();
+    edApplySearch();
+  }
+
+  // 検索欄：素材タブは名前、台本タブは本文で絞り込む
+  function edApplySearch() {
+    var inp = document.getElementById("edSearch");
+    var q = ((inp && inp.value) || "").trim().toLowerCase();
+    var sel = _edTab === "script" ? "#edScript .ed-line" :
+              _edTab === "assets" ? "#edAssets .ed-asset" : null;
+    if (!sel) return;
+    document.querySelectorAll(sel).forEach(function (n) {
+      n.style.display = (!q || (n.textContent || "").toLowerCase().indexOf(q) >= 0) ? "" : "none";
+    });
+  }
+
+  // ---- 台本タブ（#36）：時刻つき字幕。行クリック=シーク、✕=カット(#37) ----
+  function edLoadScript(force) {
+    var box = document.getElementById("edScript");
+    if (!box) return;
+    if (_edScript && !force) { edRenderScript(); return; }
+    if (!_edVid) {
+      box.innerHTML = '<div class="ed-empty">' +
+        esc(chatUI.t("この動画には台本がありません（YouTube由来の動画のみ）")) + "</div>";
+      return;
+    }
+    box.innerHTML = '<div class="ed-empty">' + esc(chatUI.t("台本を取得しています…")) + "</div>";
+    var a = api();
+    if (!a || !a.get_transcript) return;
+    var vid = _edVid;
+    a.get_transcript(vid).then(function (d) {
+      try { d = typeof d === "string" ? JSON.parse(d) : d; } catch (e) {}
+      if (vid !== _edVid) return;              // 取得中に別の素材へ切り替えた
+      if (!d || d.error || !(d.lines || []).length) {
+        box.innerHTML = '<div class="ed-empty">' +
+          esc((d && d.error) || chatUI.t("台本を取得できませんでした")) + "</div>";
+        return;
+      }
+      _edScript = d.lines;
+      edRenderScript();
+    }).catch(function () {
+      if (vid !== _edVid) return;
+      box.innerHTML = '<div class="ed-empty">' + esc(chatUI.t("台本を取得できませんでした")) + "</div>";
+    });
+  }
+  function edLineCut(i) {
+    for (var k = 0; k < _edCuts.length; k++) if (_edCuts[k].li === i) return true;
+    return false;
+  }
+  function edRenderScript() {
+    var box = document.getElementById("edScript");
+    if (!box || !_edScript) return;
+    _edActiveLine = -1;
+    box.innerHTML = _edScript.map(function (l, i) {
+      var isCut = edLineCut(i);
+      var cls = "ed-line" + (l.gone ? " gone" : "") + (isCut ? " cut" : "");
+      return '<div class="' + cls + '" data-i="' + i + '">' +
+        '<span class="tc">' + edFmtRuler(l.o) + "</span>" +
+        '<span class="tx">' + esc(l.text) + "</span>" +
+        (l.gone ? "" :
+          '<button class="del" title="' + esc(chatUI.t(isCut ? "復元" : "この行をカット")) + '">' +
+          (isCut ? "↩" : "✕") + "</button>") +
+        "</div>";
+    }).join("");
+    box.querySelectorAll(".ed-line").forEach(function (row) {
+      var i = +row.getAttribute("data-i");
+      row.addEventListener("click", function (e) {
+        if (e.target.closest && e.target.closest(".del")) return;
+        edSeekLine(i);
+      });
+      var del = row.querySelector(".del");
+      if (del) del.addEventListener("click", function (e) {
+        e.stopPropagation();
+        edToggleLineCut(i);
+      });
+    });
+    edApplySearch();
+  }
+  function edSeekLine(i) {
+    var l = _edScript && _edScript[i], v = document.getElementById("edVideo");
+    if (!l || !v || !edDur()) return;
+    var t = Math.min(Math.max(0, l.o), Math.max(0, edDur() - 0.05));
+    var rs = edCutRanges();
+    for (var k = 0; k < rs.length; k++) {
+      if (t >= rs[k][0] && t < rs[k][1]) { t = Math.min(rs[k][1] + 0.01, edDur()); break; }
+    }
+    v.currentTime = t;
+    edMovePlayhead();
+    edSetActiveLine(i);
+  }
+  // 再生位置に合わせて台本の現在行をハイライト
+  function edSyncActiveLine() {
+    if (!_edScript || _edTab !== "script") return;
+    var v = document.getElementById("edVideo");
+    if (!v) return;
+    var t = v.currentTime, idx = -1;
+    for (var i = 0; i < _edScript.length; i++) {
+      var l = _edScript[i];
+      if (!l.gone && !edLineCut(i) && t >= l.o && t < Math.max(l.o2, l.o + 0.01)) { idx = i; break; }
+    }
+    if (idx !== _edActiveLine) edSetActiveLine(idx);
+  }
+  function edSetActiveLine(i) {
+    _edActiveLine = i;
+    var box = document.getElementById("edScript");
+    if (!box) return;
+    box.querySelectorAll(".ed-line.active").forEach(function (x) { x.classList.remove("active"); });
+    if (i >= 0) {
+      var row = box.querySelector('.ed-line[data-i="' + i + '"]');
+      if (row) {
+        row.classList.add("active");
+        try { row.scrollIntoView({ block: "nearest" }); } catch (e) {}
+      }
+    }
+  }
+
+  // ---- 行の削除＝カット（#37）。履歴つき（元に戻す / やり直す） ----
+  function edToggleLineCut(i) {
+    var l = _edScript && _edScript[i];
+    if (!l || l.gone) return;
+    var idx = -1;
+    for (var k = 0; k < _edCuts.length; k++) if (_edCuts[k].li === i) idx = k;
+    if (idx >= 0) _edCuts.splice(idx, 1);
+    else _edCuts.push({ s: l.o, e: Math.max(l.o2, l.o + 0.15), li: i });
+    edPushHist();
+    edAfterCutsChanged();
+  }
+  function edPushHist() {
+    _edHist = _edHist.slice(0, _edHistIdx + 1);
+    _edHist.push(JSON.parse(JSON.stringify(_edCuts)));
+    _edHistIdx = _edHist.length - 1;
+  }
+  function edUndoRedo(dir) {
+    var n = _edHistIdx + dir;
+    if (n < 0 || n >= _edHist.length) return;
+    _edHistIdx = n;
+    _edCuts = JSON.parse(JSON.stringify(_edHist[n]));
+    edAfterCutsChanged();
+  }
+  function edAfterCutsChanged() {
+    edRenderScript();
+    edRebuild();
+    edUpdateButtons();
+  }
+  function edUpdateButtons() {
+    var b = document.getElementById("edExport");
+    if (b) {
+      b.disabled = _edExporting || !_edCuts.length || !_edVid;
+      b.textContent = _edExporting ? chatUI.t("書き出し中…") : chatUI.t("書き出す");
+    }
+    var u = document.getElementById("edUndo"), r = document.getElementById("edRedo");
+    if (u) u.disabled = _edHistIdx <= 0;
+    if (r) r.disabled = _edHistIdx >= _edHist.length - 1;
+  }
+
+  // ---- 書き出す：カットを適用して再レンダリング（Python側でffmpeg） ----
+  function edExport() {
+    if (_edExporting || !_edVid || !_edCuts.length) return;
+    var a = api();
+    if (!a || !a.export_cuts) return;
+    _edExporting = true;
+    edUpdateButtons();
+    var cuts = edCutRanges().map(function (r) { return { s: r[0], e: r[1] }; });
+    a.export_cuts(_edVid, cuts).then(function (d) {
+      try { d = typeof d === "string" ? JSON.parse(d) : d; } catch (e) {}
+      if (d && d.error) {
+        _edExporting = false;
+        edUpdateButtons();
+        chatUI.addError(d.error);
+      }
+    }).catch(function () { _edExporting = false; edUpdateButtons(); });
+  }
+  // Python から書き出し完了通知（完成カードは addVideoCard で別途届く）
+  chatUI.exportDone = function (ok) {
+    _edExporting = false;
+    edUpdateButtons();
+    var box = document.getElementById("edAssets");
+    if (box) box._filled = false;      // 次に開いたとき素材レールを更新
+    if (ok) chatUI.closeEditor();
+  };
 
   (function wireEditor() {
     var v = document.getElementById("edVideo");
@@ -1010,7 +1286,7 @@
     if (zi) zi.addEventListener("click", function () { edZoomBy(1.4); });
     if (zo) zo.addEventListener("click", function () { edZoomBy(1 / 1.4); });
 
-    // 目盛り／レーンをクリックしてシーク
+    // 目盛り／レーンをクリックしてシーク（表示時刻→カットを飛ばした実時刻へ変換）
     var wrap = document.getElementById("edTrackWrap");
     if (wrap) wrap.addEventListener("click", function (e) {
       var vv = document.getElementById("edVideo");
@@ -1018,9 +1294,23 @@
       if (e.target.closest && e.target.closest(".ed-track-hd")) return;
       var r = wrap.getBoundingClientRect();
       var x = e.clientX - r.left + wrap.scrollLeft - 42;
-      vv.currentTime = Math.min(edDur(), Math.max(0, x / _edPxPerSec));
+      vv.currentTime = Math.min(edDur(), Math.max(0, edSrcT(x / _edPxPerSec)));
       edMovePlayhead();
     });
+
+    // 左レールのタブ切替（素材 / ライブラリ / 台本）
+    document.querySelectorAll(".ed-tab").forEach(function (b) {
+      b.addEventListener("click", function () { edSetTab(this.getAttribute("data-tab")); });
+    });
+    // 検索（現在のタブの中身を絞り込む）
+    var sch = document.getElementById("edSearch");
+    if (sch) sch.addEventListener("input", edApplySearch);
+    // 元に戻す / やり直す / 書き出す
+    var un = document.getElementById("edUndo"), re = document.getElementById("edRedo");
+    if (un) un.addEventListener("click", function () { edUndoRedo(-1); });
+    if (re) re.addEventListener("click", function () { edUndoRedo(1); });
+    var ex = document.getElementById("edExport");
+    if (ex) ex.addEventListener("click", edExport);
   })();
 
   function edTogglePlay() {
@@ -1517,7 +1807,10 @@
   // DOM属性に無い動的メッセージ用のキーも翻訳マップに載せる
   var EXTRA_I18N_KEYS = ["接続できました", "接続できませんでした", "保存しました", "設定を開く",
     "話しかけるように書く…", "動画を作成しています", "準備しています…", "プレビューを見る", "完了",
-    "動画", "音声", "素材はまだありません"];
+    "動画", "音声", "素材はまだありません",
+    "台本を取得しています…", "台本を取得できませんでした",
+    "この動画には台本がありません（YouTube由来の動画のみ）", "ライブラリ機能は近日公開",
+    "この行をカット", "復元", "書き出し中…", "書き出す"];
   function collectI18nKeys() {
     var seen = {};
     ["data-i18n", "data-i18n-ph", "data-i18n-ph-narrow", "data-i18n-title", "data-i18n-prompt"].forEach(function (attr) {
