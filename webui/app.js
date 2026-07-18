@@ -1622,6 +1622,8 @@
       var g = document.getElementById("setGemini"); if (g) g.value = s.gemini_key || "";
       var y = document.getElementById("setYoutube"); if (y) y.value = s.youtube_key || "";
       buildLangSelect(document.getElementById("setUiLang"), s.ui_lang || "ja");
+      var sp = document.getElementById("setSourcePref");
+      if (sp) sp.value = s.source_preference || "prefer_original";
       var pb = document.getElementById("setPlan");
       if (pb) pb.textContent = (s.plan === "pro") ? "Pro" : (chatUI.t("デモモード"));
       var cr = document.getElementById("setCredits");
@@ -1650,6 +1652,11 @@
     var g = (document.getElementById("setGemini") || {}).value || "";
     var y = (document.getElementById("setYoutube") || {}).value || "";
     a.save_api_keys(g, y, "", "").then(function () { seg("stSave", true, "✓ " + chatUI.t("保存しました")); });
+  };
+
+  chatUI.changeSourcePref = function (v) {
+    var a = api();
+    if (a && a.set_source_preference) a.set_source_preference(v);
   };
 
   chatUI.changeLang = function (lang) {

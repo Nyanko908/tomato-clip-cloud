@@ -876,6 +876,15 @@
         <select class="inp" id="setUiLang" onchange="chatUI.changeLang(this.value)"></select>
       </div>
       <div class="fg">
+        <div class="sec-title" data-i18n="🔎 検索ソース">🔎 検索ソース</div>
+        <select class="inp" id="setSourcePref" onchange="chatUI.changeSourcePref(this.value)">
+          <option value="prefer_original" data-i18n="原典を優先（おすすめ）">原典を優先（おすすめ）</option>
+          <option value="original_only" data-i18n="原典のみ">原典のみ</option>
+          <option value="any" data-i18n="こだわらない">こだわらない</option>
+        </select>
+        <div class="seg" data-i18n="他人の切り抜きを避け、配信アーカイブなどの原典から見せ場を探して切り出します">他人の切り抜きを避け、配信アーカイブなどの原典から見せ場を探して切り出します</div>
+      </div>
+      <div class="fg">
         <div class="sec-title" data-i18n="🔐 ライセンス">🔐 ライセンス</div>
         <div><span class="plan-badge" id="setPlan">—</span> <span class="seg" id="setCredits" style="display:inline"></span></div>
         <div class="row"><input class="inp" id="setLicense" placeholder="XXXXXXXX-XXXX-..."><button class="btn primary" onclick="chatUI.activate()" data-i18n="認証">認証</button></div>

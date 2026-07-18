@@ -60,12 +60,16 @@ def discover_shorts(youtube_key: str,
                     log: LOG_CB,
                     freshness_hours: int = 72,
                     search_keywords: str = "",
-                    ai_queries: list[dict] = None) -> list[dict]:
+                    ai_queries: list[dict] = None,
+                    source_preference: str = "any") -> list[dict]:
     """
     YouTube Data API で海外ショートを取得。
     優先チャンネル → 新着検索 → トレンドの順。
     処理済みIDはDBで照合してスキップ。
     freshness_hours: この時間以内の動画を新着優先で取得（0=制限なし）
+    source_preference: "prefer_original"/"original_only" なら 4分未満の強制を外し
+      配信アーカイブ等の原典（長尺）も候補に含める（見せ場は区間DLで切り出す）。
+      素性の判定と重み付けは score_videos が行う。"any"=従来通りショートのみ。
     """
     import urllib.request, urllib.parse
     from datetime import datetime, timezone, timedelta
@@ -88,13 +92,20 @@ def discover_shorts(youtube_key: str,
         with urllib.request.urlopen(url, timeout=10) as r:
             return json.loads(r.read())
 
-    def _add(vid, title, channel, views, thumb, priority):
+    # 原典（長尺）も拾うか。拾った長尺は pick_highlight_segment が見せ場だけ区間DLする。
+    allow_long = source_preference in ("prefer_original", "original_only")
+    dur_max    = 7200 if allow_long else 65   # 原典許可時は2時間まで（配信アーカイブ想定）
+    if allow_long:
+        log("🔎 検索ソース: 原典を含める（4分未満の強制を解除）")
+
+    def _add(vid, title, channel, views, thumb, priority, desc="", dur_sec=0):
         if vid in seen or vid in used_ids:
             return False
         seen.add(vid)
         results.append({
             "id": vid, "title": title, "channel": channel,
-            "views": views, "thumbnail": thumb, "priority": priority
+            "views": views, "thumbnail": thumb, "priority": priority,
+            "desc": (desc or "")[:300], "dur_sec": int(dur_sec or 0),
         })
         return True
 
@@ -102,14 +113,15 @@ def discover_shorts(youtube_key: str,
         try:
             d = api_get(
                 f"https://www.googleapis.com/youtube/v3/videos"
-                f"?part=statistics,contentDetails&id={vid}&key={youtube_key}"
+                f"?part=snippet,statistics,contentDetails&id={vid}&key={youtube_key}"
             )
             item = d["items"][0] if d.get("items") else {}
             views = int(item.get("statistics", {}).get("viewCount", 0))
             dur   = item.get("contentDetails", {}).get("duration", "PT999S")
-            return views, dur
+            desc  = item.get("snippet", {}).get("description", "")
+            return views, dur, desc
         except Exception:
-            return 0, "PT999S"
+            return 0, "PT999S", ""
 
     # ── 優先チャンネル
     for ch in priority_channels[:5]:
@@ -118,6 +130,8 @@ def discover_shorts(youtube_key: str,
             p = {"part": "snippet", "channelId": ch["id"], "type": "video",
                  "videoDuration": "short", "order": "date",
                  "maxResults": 5, "key": youtube_key}
+            if allow_long:
+                p.pop("videoDuration", None)   # 原典（配信アーカイブ等）も拾う
             if cutoff:
                 p["publishedAfter"] = cutoff
             data = api_get(f"https://www.googleapis.com/youtube/v3/search?{urllib.parse.urlencode(p)}")
@@ -125,9 +139,12 @@ def discover_shorts(youtube_key: str,
                 vid = item["id"].get("videoId")
                 if not vid:
                     continue
-                views, _ = _get_detail(vid)
+                views, dur, desc = _get_detail(vid)
+                if not (5 <= _parse_duration(dur) <= dur_max):
+                    continue
                 _add(vid, item["snippet"]["title"], item["snippet"]["channelTitle"],
-                     views, item["snippet"]["thumbnails"].get("medium", {}).get("url", ""), True)
+                     views, item["snippet"]["thumbnails"].get("medium", {}).get("url", ""), True,
+                     desc=desc, dur_sec=_parse_duration(dur))
         except Exception as e:
             log(f"⚠️ {ch.get('name','?')} 取得失敗: {e}")
 
@@ -142,6 +159,8 @@ def discover_shorts(youtube_key: str,
                 p = {"part": "snippet", "q": kw, "type": "video",
                      "videoDuration": "short", "order": "date",
                      "maxResults": 10, "key": youtube_key}
+                if allow_long:
+                    p.pop("videoDuration", None)
                 if cutoff:
                     p["publishedAfter"] = cutoff
                 data = api_get(f"https://www.googleapis.com/youtube/v3/search?{urllib.parse.urlencode(p)}")
@@ -156,12 +175,14 @@ def discover_shorts(youtube_key: str,
                 for item in d2.get("items", []):
                     vid = item["id"]
                     dur = item.get("contentDetails", {}).get("duration", "PT999S")
-                    if not (5 <= _parse_duration(dur) <= 65):
+                    if not (5 <= _parse_duration(dur) <= dur_max):
                         continue
                     views = int(item["statistics"].get("viewCount", 0))
                     thumb = item["snippet"]["thumbnails"].get("medium", {}).get("url", "")
                     _add(vid, item["snippet"]["title"], item["snippet"]["channelTitle"],
-                         views, thumb, False)
+                         views, thumb, False,
+                         desc=item["snippet"].get("description", ""),
+                         dur_sec=_parse_duration(dur))
             except Exception as e:
                 log(f"⚠️ AI検索失敗({kw}): {e}")
 
@@ -182,6 +203,8 @@ def discover_shorts(youtube_key: str,
                      "videoDuration": "short",
                      "videoCategoryId": cat, "order": "date",
                      "maxResults": 10, "key": youtube_key}
+                if allow_long:
+                    p.pop("videoDuration", None)
                 if cutoff:
                     p["publishedAfter"] = cutoff
                 data = api_get(f"https://www.googleapis.com/youtube/v3/search?{urllib.parse.urlencode(p)}")
@@ -196,12 +219,14 @@ def discover_shorts(youtube_key: str,
                 for item in d2.get("items", []):
                     vid = item["id"]
                     dur = item.get("contentDetails", {}).get("duration", "PT999S")
-                    if not (5 <= _parse_duration(dur) <= 65):
+                    if not (5 <= _parse_duration(dur) <= dur_max):
                         continue
                     views = int(item["statistics"].get("viewCount", 0))
                     thumb = item["snippet"]["thumbnails"].get("medium", {}).get("url", "")
                     _add(vid, item["snippet"]["title"], item["snippet"]["channelTitle"],
-                         views, thumb, False)
+                         views, thumb, False,
+                         desc=item["snippet"].get("description", ""),
+                         dur_sec=_parse_duration(dur))
             except Exception as e:
                 log(f"⚠️ 新着検索失敗: {e}")
 
@@ -219,12 +244,14 @@ def discover_shorts(youtube_key: str,
                 for item in data.get("items", []):
                     vid = item["id"]
                     dur = item.get("contentDetails", {}).get("duration", "PT999S")
-                    if not (5 <= _parse_duration(dur) <= 65):
+                    if not (5 <= _parse_duration(dur) <= dur_max):
                         continue
                     views = int(item["statistics"].get("viewCount", 0))
                     thumb = item["snippet"]["thumbnails"].get("medium", {}).get("url", "")
                     _add(vid, item["snippet"]["title"], item["snippet"]["channelTitle"],
-                         views, thumb, False)
+                         views, thumb, False,
+                         desc=item["snippet"].get("description", ""),
+                         dur_sec=_parse_duration(dur))
             except Exception as e:
                 log(f"⚠️ トレンド取得失敗: {e}")
 
@@ -341,10 +368,17 @@ def _parse_duration(iso: str) -> int:
 # ════════════════════════════════════════════════════════
 #  Step 2: AI スコアリング（どの動画を採用するか）
 # ════════════════════════════════════════════════════════
-def score_videos(model, videos: list[dict], log: LOG_CB, gemini_rot=None) -> list[dict]:
+def score_videos(model, videos: list[dict], log: LOG_CB, gemini_rot=None,
+                 source_preference: str = "any") -> list[dict]:
     """
-    Gemini にタイトル・チャンネル・再生数を渡してスコアリング。
-    score: 0–100、reason: 理由
+    Gemini にタイトル・チャンネル・概要欄・尺・再生数を渡してスコアリング＋素性判定。
+    score: 0–100、reason: 理由、source_type: original/clip/repost
+
+    素性判定はキーワードでは12言語に対応できないため Gemini に分類させる。
+    弾かずに信号として使い、source_preference で重み付けする：
+      prefer_original … 原典+15 / 切り抜き-10 / 転載-25
+      original_only   … 切り抜き・転載を除外（判定不能 unknown は残す）
+      any             … 重み付けなし（従来通り）
     """
     log("🤖 AI スコアリング中...")
     if not videos:
@@ -355,12 +389,14 @@ def score_videos(model, videos: list[dict], log: LOG_CB, gemini_rot=None) -> lis
 
     items_json = json.dumps([
         {"id": v["id"], "title": v["title"],
-         "channel": v["channel"], "views": v["views"]}
+         "channel": v["channel"], "views": v["views"],
+         "duration_sec": v.get("dur_sec", 0),
+         "description": (v.get("desc") or "")[:200]}
         for v in videos
     ], ensure_ascii=False)
 
     prompt = f"""
-以下の海外ショート動画リストを、日本語解説チャンネルとして採用すべきか評価してください。
+以下の海外動画リストを、日本語解説チャンネルとして採用すべきか評価してください。
 JSONのみ返答（コードブロック不要）。
 {learning_ctx}
 
@@ -369,9 +405,15 @@ JSONのみ返答（コードブロック不要）。
 - 日本人が知らなそうな文化的面白さ
 - 字幕・解説を付けることで価値が増すか
 
+さらに各動画の「素性」を、タイトル・チャンネル名・概要欄・尺から判定してください:
+- "original": 本人・公式チャンネルの投稿（配信アーカイブや長尺はほぼこれ）
+- "clip":     他人が本人の映像を切り抜き・編集した動画（クレジット表記・許可切り抜きを含む）
+- "repost":   無断転載・コンピレーション・出所不明の寄せ集め
+- "unknown":  判断材料が足りない
+
 返答形式:
 [
-  {{"id": "動画ID", "score": 0-100の整数, "reason": "30文字以内の理由", "title_jp": "日本語タイトル案"}},
+  {{"id": "動画ID", "score": 0-100の整数, "reason": "30文字以内の理由", "title_jp": "日本語タイトル案", "source_type": "original/clip/repost/unknown"}},
   ...
 ]
 
@@ -384,6 +426,7 @@ JSONのみ返答（コードブロック不要）。
             v["score"]    = 65 + (10 if v.get("priority") else 0)
             v["reason"]   = ""
             v["title_jp"] = v["title"]
+            v["source_type"] = "unknown"
     else:
         try:
             raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
@@ -394,12 +437,34 @@ JSONのみ返答（コードブロック不要）。
                 v["score"]    = s.get("score", 50)
                 v["reason"]   = s.get("reason", "")
                 v["title_jp"] = s.get("title_jp", v["title"])
+                st = str(s.get("source_type", "unknown")).lower()
+                v["source_type"] = st if st in ("original", "clip", "repost") else "unknown"
         except Exception as e:
             log(f"⚠️ スコアリングJSON解析失敗: {e}")
             for v in videos:
                 v["score"]    = 65 + (10 if v.get("priority") else 0)
                 v["reason"]   = ""
                 v["title_jp"] = v["title"]
+                v["source_type"] = "unknown"
+
+    # 素性による重み付け（弾くのは original_only の明確な clip/repost だけ）
+    _ST_JP = {"original": "原典", "clip": "切り抜き", "repost": "転載", "unknown": "不明"}
+    if source_preference == "prefer_original":
+        bonus = {"original": 15, "clip": -10, "repost": -25}
+        for v in videos:
+            b = bonus.get(v.get("source_type"), 0)
+            if b:
+                v["score"] = max(0, min(100, v["score"] + b))
+    elif source_preference == "original_only":
+        before = len(videos)
+        dropped = [v for v in videos if v.get("source_type") in ("clip", "repost")]
+        videos  = [v for v in videos if v.get("source_type") not in ("clip", "repost")]
+        if dropped:
+            log(f"🚫 原典のみ設定: {before - len(videos)}件を除外"
+                f"（{'、'.join(_ST_JP[d['source_type']] + ':' + d['title'][:18] for d in dropped[:3])}…）")
+        if not videos:
+            log("⚠️ 原典が見つかりませんでした（設定「原典のみ」）")
+            return []
 
     # 優先チャンネル +10 ボーナス
     for v in videos:
@@ -407,7 +472,9 @@ JSONのみ返答（コードブロック不要）。
             v["score"] = min(100, v["score"] + 10)
 
     videos.sort(key=lambda x: x["score"], reverse=True)
-    log(f"✅ スコアリング完了 (Top: {videos[0]['title'][:30]} / {videos[0]['score']}点)")
+    top = videos[0]
+    log(f"✅ スコアリング完了 (Top: {top['title'][:30]} / {top['score']}点"
+        f" / 素性:{_ST_JP.get(top.get('source_type', 'unknown'), '不明')})")
     return videos
 
 
@@ -1588,6 +1655,7 @@ def run_pipeline(config: dict, log: LOG_CB,
         freshness_hours   = int(config.get("freshness_hours", 72)) if not force_kw else 0,
         search_keywords   = config.get("search_keywords", ""),
         ai_queries        = ai_queries or None,
+        source_preference = config.get("source_preference", "prefer_original"),
     )
 
     # 指定テーマの場合、タイトル/チャンネル名にテーマ語を含む動画だけに絞る
@@ -1613,7 +1681,8 @@ def run_pipeline(config: dict, log: LOG_CB,
     # ── Step 2: AI スコアリング
     log("\n【Step 2/6】🤖 AI スコアリング中...")
     time.sleep(SLEEP)
-    videos = score_videos(model, videos, log, gemini_rot=gemini_rot)
+    videos = score_videos(model, videos, log, gemini_rot=gemini_rot,
+                          source_preference=config.get("source_preference", "prefer_original"))
 
     targets = [v for v in videos if v["score"] >= 60][:1]
     if not targets:

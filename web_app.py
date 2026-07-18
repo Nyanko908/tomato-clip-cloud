@@ -42,6 +42,8 @@ _DEFAULTS = {
     "search_keywords": "", "my_channel_id": "", "auto_memory": True,
     "agreed_terms": False, "ui_lang": "ja", "seen_tutorial": False,
     "output_language": "ja", "monthly_goal": 10, "dev_mode": False,
+    # 検索の素性設定: prefer_original(既定・原典優先) / original_only / any
+    "source_preference": "prefer_original",
 }
 
 
@@ -880,8 +882,17 @@ class Api:
             "gemini_key": self.config.get("gemini_key", ""),
             "youtube_key": self.config.get("youtube_key", ""),
             "credentials_path": self.config.get("credentials_path", ""),
+            "source_preference": self.config.get("source_preference", "prefer_original"),
         })
         return st
+
+    def set_source_preference(self, value):
+        """検索ソースの素性設定（原典優先/原典のみ/こだわらない）を保存する。"""
+        if value in ("prefer_original", "original_only", "any"):
+            self.config["source_preference"] = value
+            save_config(self.config)
+            return True
+        return False
 
     def agree_terms(self, ui_lang="ja", output_language="ja"):
         self.config["agreed_terms"] = True

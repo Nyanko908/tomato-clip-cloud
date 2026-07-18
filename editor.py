@@ -29,6 +29,7 @@ SUBTITLE_COLOR   = "#FF3B30"
 CAPTION_COLOR    = "#00FF5A"
 FONT_PATH        = "NotoSansJP-Bold.ttf"
 CAPTION_ZONE_H   = 320
+TITLE_SHOW_SEC   = 4.5   # タイトル/サブタイトルを冒頭に出す秒数（全編出しっぱなし対策）
 
 
 # ════════════════════════════════════════════════════════
@@ -682,6 +683,16 @@ def run_edit(video_path: str, analysis: dict,
     log("[1/7] 動画読み込み...")
     raw = VideoFileClip(video_path)
 
+    # 出力fpsは素材に合わせる（従来は30固定で60fps素材の滑らかさが半減していた）。
+    # 可変fps等で異常値が来ても壊れないよう 24〜60 に収める。
+    try:
+        out_fps = int(round(float(raw.fps or 30)))
+    except Exception:
+        out_fps = 30
+    out_fps = max(24, min(60, out_fps))
+    if out_fps != 30:
+        log(f"  🎞 出力fps: {out_fps}（素材に追従）")
+
     # analysis の秒数はすべて「元動画」基準。各変換で尺が変わるので、
     # 使う直前に tmap.map() で現在のクリップ上の秒数へ直す。
     tmap = TimeMap()
@@ -765,6 +776,9 @@ def run_edit(video_path: str, analysis: dict,
 
     title    = analysis.get("title",    "海外バズり")
     subtitle = analysis.get("subtitle", "今週の注目")
+    # タイトルは冒頭のフック。全編出しっぱなしだと映像に被り続けるので
+    # 最初の数秒だけ表示する（短い動画は尺の半分まで）。
+    title_end = min(dur, max(TITLE_SHOW_SEC, 0.5) if dur > TITLE_SHOW_SEC * 2 else dur / 2)
     for text, color, fsize, y in [
         (title,    TITLE_COLOR,    fs_title,    100),
         (subtitle, SUBTITLE_COLOR, fs_subtitle, 200),
@@ -778,7 +792,7 @@ def run_edit(video_path: str, analysis: dict,
         draw  = ImageDraw.Draw(img)
         draw.text((12, 6), text, font=font, fill="#000000AA")
         draw.text((10, 4), text, font=font, fill=color)
-        overlays.append((img, "center", y, 0.0, dur))
+        overlays.append((img, "center", y, 0.0, title_end))
 
     # 字幕
     caption_times = []
@@ -873,6 +887,7 @@ def run_edit(video_path: str, analysis: dict,
                 bgm_path=simple_bgm_path, bgm_volume=simple_bgm_volume,
                 tw=tw, th=th, rw=rw, rh=rh, vx=vx, vy=vy, dur=dur,
                 out_path=out_path, preset=encode_preset, log=log,
+                out_fps=out_fps,
             )
             done = True
         except Exception as e:
@@ -885,6 +900,7 @@ def run_edit(video_path: str, analysis: dict,
             bgm_path=simple_bgm_path, bgm_volume=simple_bgm_volume,
             tw=tw, th=th, scale=scale, vx=vx, vy=vy, dur=dur,
             out_path=out_path, preset=encode_preset, log=log,
+            out_fps=out_fps,
         )
 
     log(f"✅ 編集完了: {Path(out_path).name}")
@@ -999,7 +1015,7 @@ def _bgm_array(bgm_path: str, video_dur: float, volume: float, log) -> np.ndarra
 def _export_fast(cut, src_path, unmodified, overlays, caption_times,
                  narr_path, bgm_path, bgm_volume,
                  tw, th, rw, rh, vx, vy, dur,
-                 out_path, preset, log):
+                 out_path, preset, log, out_fps=30):
     """
     合成とエンコードを ffmpeg のフィルターグラフで一括実行する高速パス。
     映像エフェクト適用済みの cut を低解像度のまま中間ファイルへ書き、
@@ -1018,9 +1034,13 @@ def _export_fast(cut, src_path, unmodified, overlays, caption_times,
         else:
             log("[6/7] 映像前処理（エフェクト適用）...")
             stage1 = str(tmpdir / "stage1.mp4")
+            # 中間ファイルは後段で必ず再エンコードされる。既定crf(23)のままだと
+            # 「劣化した素材の再圧縮」になるので、crf12=ほぼ無劣化で書く
+            # （ultrafast維持＝速度はそのまま、一時ファイルが太るだけ）。
             cut.write_videofile(
-                stage1, fps=30, codec="libx264", preset="ultrafast",
-                audio=False, threads=os.cpu_count() or 4, logger=None
+                stage1, fps=out_fps, codec="libx264", preset="ultrafast",
+                audio=False, threads=os.cpu_count() or 4, logger=None,
+                ffmpeg_params=["-crf", "12"],
             )
 
         # ── 音声ミックス（numpy）
@@ -1071,7 +1091,7 @@ def _export_fast(cut, src_path, unmodified, overlays, caption_times,
             cmd += ["-i", p]
 
         parts = [
-            f"color=black:size={tw}x{th}:duration={dur:.3f}:rate=30[bg]",
+            f"color=black:size={tw}x{th}:duration={dur:.3f}:rate={out_fps}[bg]",
             f"[0:v]scale={rw}:{rh}[v0]",
             f"[bg][v0]overlay={vx}:{vy}:eof_action=repeat[m0]",
         ]
@@ -1088,7 +1108,7 @@ def _export_fast(cut, src_path, unmodified, overlays, caption_times,
             "-filter_complex", ";".join(parts),
             "-map", f"[{cur}]", "-map", "1:a",
             "-c:v", "libx264", "-preset", preset, "-crf", "20",
-            "-pix_fmt", "yuv420p", "-r", "30",
+            "-pix_fmt", "yuv420p", "-r", str(out_fps),
             "-c:a", "aac", "-b:a", "192k",
             "-t", f"{dur:.3f}", str(out_path),
         ]
@@ -1103,7 +1123,7 @@ def _export_fast(cut, src_path, unmodified, overlays, caption_times,
 def _export_moviepy(cut, overlays, caption_times, analysis, narr_path,
                     bgm_path, bgm_volume,
                     tw, th, scale, vx, vy, dur,
-                    out_path, preset, log):
+                    out_path, preset, log, out_fps=30):
     """従来方式（moviepy全合成）。テンプレート演出や高速パス失敗時に使用"""
     from moviepy.editor import (
         ColorClip, CompositeVideoClip, CompositeAudioClip,
@@ -1167,7 +1187,7 @@ def _export_moviepy(cut, overlays, caption_times, analysis, narr_path,
     if audio_tracks:
         final = final.set_audio(CompositeAudioClip(audio_tracks))
     final.write_videofile(
-        out_path, fps=30, codec="libx264",
+        out_path, fps=out_fps, codec="libx264",
         audio_codec="aac", preset=preset, threads=4, logger=None
     )
 

@@ -145,6 +145,7 @@ _ALLOWED = {
     "get_stats", "get_youtube_dashboard",
     "list_schedule", "add_schedule", "reschedule", "cancel_schedule",
     "update_schedule_prompt", "list_videos", "get_transcript", "export_cuts",
+    "set_source_preference",
     "cloud_get_state", "cloud_make_bundle", "cloud_save_url", "cloud_test", "cloud_launch_setup",
     "account_state", "account_login", "account_logout", "cloud_push_settings", "account_token",
     "cloud_server_state",
