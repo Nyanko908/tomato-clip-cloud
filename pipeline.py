@@ -879,6 +879,59 @@ _LANG_STYLE = {
 }
 
 
+# 出力言語が非ラテン文字の言語（ja/ko/hi）なのに字幕がラテン文字だらけ＝
+# モデルが指示を無視して音声を逐語書き起こしした取りこぼし（実例あり:
+# output_language=ja で "aye. that's ripe enough for cake." が焼かれた）。
+# プロンプトで禁止しても時々起きるので、解析後に検出して書き直す。
+# ラテン文字言語同士（en/es等）は文字種で判定できないため対象外。
+_NONLATIN_SCRIPT_LANGS = {"ja", "ko", "hi"}
+
+
+def _looks_wrong_lang(text: str, lang: str) -> bool:
+    if lang not in _NONLATIN_SCRIPT_LANGS:
+        return False
+    letters = [c for c in str(text) if c.isalpha()]
+    if len(letters) < 4:          # 「w」「LOL」程度の混じりは誤検出しない
+        return False
+    return sum(1 for c in letters if c.isascii()) / len(letters) > 0.7
+
+
+def _fix_text_language(client, data: dict, lang: str, log: LOG_CB) -> dict:
+    """captions/title等が出力言語になっていなければ、テキストだけ翻訳し直す保険。"""
+    import re
+    caps = data.get("captions") or []
+    bad = [i for i, c in enumerate(caps)
+           if isinstance(c, dict) and _looks_wrong_lang(c.get("text", ""), lang)]
+    singles = [k for k in ("title", "subtitle", "narration")
+               if _looks_wrong_lang(data.get(k, ""), lang)]
+    if not bad and not singles:
+        return data
+    lang_name = _LANG_NAMES.get(lang, "日本語")
+    log(f"⚠️ 字幕が{lang_name}になっていません（{len(bad) + len(singles)}件）→ 書き直します")
+    texts = [caps[i].get("text", "") for i in bad] + [str(data.get(k, "")) for k in singles]
+    prompt = (
+        f"以下はショート動画の字幕テキストです。逐語訳ではなく、{lang_name}の"
+        f"視聴者向けにユーモアのある実況・意訳スタイルで、すべて{lang_name}に書き直してください。\n"
+        "同じ順序・同じ件数のJSON配列（文字列のみ）で返答。コードブロック不要。\n"
+        + json.dumps(texts, ensure_ascii=False)
+    )
+    try:
+        raw = _gemini_call(client, prompt, log=log)
+        raw = re.sub(r"^```(?:json)?|```$", "", (raw or "").strip(), flags=re.M).strip()
+        fixed = json.loads(raw)
+        if not (isinstance(fixed, list) and len(fixed) == len(texts)):
+            raise ValueError(f"件数不一致: {len(texts)}→{len(fixed) if isinstance(fixed, list) else '?'}")
+    except Exception as e:
+        log(f"⚠️ 字幕の書き直しに失敗（原文のまま続行）: {str(e)[:80]}")
+        return data
+    for j, i in enumerate(bad):
+        caps[i]["text"] = str(fixed[j])
+    for j, k in enumerate(singles):
+        data[k] = str(fixed[len(bad) + j])
+    log(f"✅ 字幕を{lang_name}に書き直しました")
+    return data
+
+
 def analyze_video(model, video_path: str, log: LOG_CB, gemini_rot=None, chat_context: str = "",
                   output_lang: str = "ja") -> dict:
     log("🔬 Gemini で動画解析中...")
@@ -1074,6 +1127,8 @@ def analyze_video(model, video_path: str, log: LOG_CB, gemini_rot=None, chat_con
                 log(f"  🔤 フォント: {data['font_style']}")
             try: current_client.files.delete(name=video_file.name)
             except Exception: pass
+            # 保険: 字幕が出力言語になっていなければ書き直す（逐語書き起こし対策）
+            data = _fix_text_language(current_client, data, output_lang, log)
             return data
         except Exception as e:
             err = str(e)

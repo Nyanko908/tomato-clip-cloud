@@ -34,6 +34,11 @@ if os.name == "posix":
     except Exception:
         pass
 
+# クラウド動作の目印。web_app.save_config はこれを見てファイル書き込みを止める
+# （WindowsローカルでのクラウドテストはHOME差し替えが効かず、env由来のほぼ空config
+#   がデスクトップの ~/.tomato_clip_config.json を上書きしてAPIキーを消すため）。
+os.environ["TOMATO_CLOUD"] = "1"
+
 # web_app の既定値を土台に使う（重複定義を避け、キーの追加に追従）。
 # web_app は import 時点で pywebview を読まない（webview は main() 内で遅延import）ので安全。
 _ROOT = Path(__file__).resolve().parent.parent

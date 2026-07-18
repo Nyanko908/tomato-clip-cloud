@@ -68,6 +68,12 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict):
+    # クラウド(server/*)では設定の真実の源は環境変数。ここで書くと、ローカルPCで
+    # クラウド版を起動してテストしたときに env由来のほぼ空のconfigが
+    # ~/.tomato_clip_config.json を上書きしてAPIキーが消える（実際に起きた）。
+    # メモリ上のconfigは更新済みなので、ファイルには書かず成功扱いにする。
+    if os.environ.get("TOMATO_CLOUD") == "1":
+        return True
     try:
         CONFIG_PATH.write_text(
             json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
