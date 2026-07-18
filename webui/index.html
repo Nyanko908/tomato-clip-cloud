@@ -219,7 +219,11 @@
   .ed-hist .lb{flex:1;font-size:12px;color:var(--ink);overflow:hidden;
     text-overflow:ellipsis;white-space:nowrap;min-width:0;}
   .ed-hist .tm{flex:0 0 auto;font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;}
-  .ed-edits .ed-empty{padding:22px 6px;}
+  .ed-hist.ai{cursor:default;}          /* AIの編集記録は読み取り専用 */
+  .ed-hist.ai:hover{background:none;}
+  .ed-hist-sec{font-size:10px;font-weight:700;color:var(--faint);
+    padding:10px 8px 3px;letter-spacing:.04em;}
+  .ed-edits .ed-empty{padding:10px 6px 16px;}
 
   .btn.primary:disabled{opacity:.45;cursor:default;}
   .btn.primary:disabled:hover{background:var(--tomato);}

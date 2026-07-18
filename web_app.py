@@ -673,6 +673,78 @@ class Api:
             tmap.add_insert(tmap.map(fz), float(meta.get("freeze_duration", 1.5)))
         return tmap, cut_list
 
+    def get_edit_log(self, video_id):
+        """
+        生成時にAIが行った編集の記録（編集タブの読み取り専用履歴）。
+        meta_json の解析結果から復元する。時刻はソースクリップ基準のMM:SS表記。
+        {"items":[{"k":"cut|fastforward|rewind|freeze|zoom|monochrome|flip|mosaic|captions",
+                   "t":秒, "label":"MM:SS–MM:SS（理由）"}]}
+        """
+        meta = {}
+        try:
+            import db
+            db.init_db()
+            row = db.get_conn().execute(
+                "SELECT meta_json FROM videos WHERE id=?", (str(video_id),)).fetchone()
+            if row:
+                meta = json.loads(row["meta_json"] or "{}")
+        except Exception:
+            meta = {}
+        if not meta:
+            return {"items": []}
+        ep = meta.get("edit_params", {}) or {}
+
+        def _fmt(s):
+            try:
+                s = float(s)
+            except (TypeError, ValueError):
+                return "?"
+            return f"{int(s) // 60:02d}:{int(s) % 60:02d}"
+
+        def _num(v):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        items = []
+        for c in meta.get("cut_sections") or []:
+            s, e = _num(c.get("start")), _num(c.get("end"))
+            if s is None or e is None:
+                continue
+            why = str(c.get("reason") or "").strip()
+            items.append({"k": "cut", "t": s,
+                          "label": f"{_fmt(s)}–{_fmt(e)}" + (f"（{why}）" if why else "")})
+        # 区間エフェクト（enabledフラグは editor.run_edit と同じ規則で尊重）
+        for k, at_k, end_k, flag in (
+                ("fastforward", "fastforward_at", "fastforward_end", "fastforward_enabled"),
+                ("zoom", "zoom_at", "zoom_end", "zoom_enabled"),
+                ("monochrome", "monochrome_at", "monochrome_end", "monochrome_enabled"),
+                ("flip", "flip_at", "flip_end", "flip_enabled"),
+                ("mosaic", "mosaic_at", "mosaic_end", "mosaic_enabled")):
+            s, e = _num(meta.get(at_k)), _num(meta.get(end_k))
+            if not ep.get(flag, True) or s is None or e is None:
+                continue
+            extra = ""
+            if k == "fastforward":
+                extra = f" ×{ep.get('fastforward_speed', 2.0)}"
+            elif k == "zoom":
+                extra = f" ×{meta.get('zoom_scale', 1.5)}"
+            items.append({"k": k, "t": s, "label": f"{_fmt(s)}–{_fmt(e)}{extra}"})
+        # 点エフェクト
+        s = _num(meta.get("rewind_at"))
+        if ep.get("rewind_enabled", True) and s is not None:
+            items.append({"k": "rewind", "t": s, "label": _fmt(s)})
+        s = _num(meta.get("freeze_at"))
+        if ep.get("freeze_enabled", True) and s is not None:
+            items.append({"k": "freeze", "t": s,
+                          "label": f"{_fmt(s)} · {meta.get('freeze_duration', 1.5)}s"})
+        items.sort(key=lambda x: x["t"])
+        n_caps = len(meta.get("captions") or [])
+        if n_caps:
+            items.insert(0, {"k": "captions", "t": -1, "label": f"{n_caps}"})
+        return {"items": items}
+
     def export_cuts(self, video_id, cuts):
         """
         台本編集で消した区間（出力動画上の秒）を出力動画から取り除いて書き出す(#37)。

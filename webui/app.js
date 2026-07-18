@@ -854,6 +854,8 @@
       _edScript = null, _edTab = "assets", _edActiveLine = -1, _edExporting = false;
   // 編集タブ用：_edHist と同じ長さの説明メタ（何をした状態か・いつか）
   var _edHistMeta = [{ k: "start", label: "", at: Date.now() }];
+  // 生成時にAIが行った編集の記録（読み取り専用。get_edit_log で取得）
+  var _edAiLog = null;
 
   chatUI.openEditor = function (src, title, vid) {
     var app = document.querySelector(".app"), p = document.getElementById("editorPanel");
@@ -868,11 +870,14 @@
       _edCuts = []; _edHist = [[]]; _edHistIdx = 0;   // カットと履歴は素材ごと
       _edHistMeta = [{ k: "start", label: "", at: Date.now() }];
       _edScript = null; _edActiveLine = -1;
+      _edAiLog = null;
+      edLoadAiLog();
       edRenderEdits();
       if (v) { v.src = src; v.load(); }
       if (_edTab === "script") edLoadScript(true);
     } else if (vid && !_edVid) {
       _edVid = vid;
+      edLoadAiLog();
     }
     p.setAttribute("aria-hidden", "false");
     app.classList.add("editor-open");
@@ -1245,28 +1250,61 @@
     var d = new Date(ts);
     return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
   }
+  // 生成時のAI編集記録を取得（読み取り専用セクション用）
+  function edLoadAiLog() {
+    if (!_edVid) return;
+    var a = api();
+    if (!a || !a.get_edit_log) return;
+    var vid = _edVid;
+    a.get_edit_log(vid).then(function (d) {
+      try { d = typeof d === "string" ? JSON.parse(d) : d; } catch (e) {}
+      if (vid !== _edVid) return;
+      _edAiLog = (d && d.items) || [];
+      edRenderEdits();
+    }).catch(function () {});
+  }
+  var _AI_ICONS = { captions: "💬", cut: "✂", fastforward: "⏩", rewind: "⏪",
+                    freeze: "⏸", zoom: "🔍", monochrome: "🎞", flip: "🔁", mosaic: "🟦" };
+  var _AI_WORDS = { captions: "字幕", cut: "カット", fastforward: "早送り", rewind: "巻き戻し",
+                    freeze: "フリーズ", zoom: "ズーム", monochrome: "モノクロ", flip: "反転", mosaic: "モザイク" };
   function edRenderEdits() {
     var box = document.getElementById("edEdits");
     if (!box) return;
-    if (_edHist.length <= 1) {
-      box.innerHTML = '<div class="ed-empty">' + esc(chatUI.t("編集履歴はまだありません")) + "</div>";
-      return;
+    var html = "";
+
+    // ── 生成時のAI編集（読み取り専用）
+    if (_edAiLog && _edAiLog.length) {
+      html += '<div class="ed-hist-sec">🤖 ' + esc(chatUI.t("AIの編集（生成時）")) + "</div>";
+      html += _edAiLog.map(function (it) {
+        var word = chatUI.t(_AI_WORDS[it.k] || it.k);
+        return '<div class="ed-hist ai">' +
+          '<span class="ic">' + (_AI_ICONS[it.k] || "✂") + "</span>" +
+          '<span class="lb">' + esc(word + " " + (it.label || "")) + "</span></div>";
+      }).join("");
     }
-    var ICONS = { start: "🎬", cut: "✂", restore: "↩" };
-    box.innerHTML = _edHist.map(function (cuts, i) {
-      var m = _edHistMeta[i] || {};
-      var label = (m.k === "start")
-        ? chatUI.t("開始")
-        : chatUI.t(m.k === "restore" ? "復元" : "カット") + " " + (m.label || "");
-      var cls = "ed-hist" + (i === _edHistIdx ? " on" : "") + (i > _edHistIdx ? " future" : "");
-      var meta = cuts.length ? "✂" + cuts.length + " · " + edFmtClock(m.at || Date.now())
-                             : edFmtClock(m.at || Date.now());
-      return '<div class="' + cls + '" data-i="' + i + '">' +
-        '<span class="ic">' + (ICONS[m.k] || "✂") + "</span>" +
-        '<span class="lb">' + esc(label) + "</span>" +
-        '<span class="tm">' + esc(meta) + "</span></div>";
-    }).join("");
-    box.querySelectorAll(".ed-hist").forEach(function (row) {
+
+    // ── あなたの編集（クリックでその時点へ）
+    html += '<div class="ed-hist-sec">' + esc(chatUI.t("あなたの編集")) + "</div>";
+    if (_edHist.length <= 1) {
+      html += '<div class="ed-empty">' + esc(chatUI.t("編集履歴はまだありません")) + "</div>";
+    } else {
+      var ICONS = { start: "🎬", cut: "✂", restore: "↩" };
+      html += _edHist.map(function (cuts, i) {
+        var m = _edHistMeta[i] || {};
+        var label = (m.k === "start")
+          ? chatUI.t("開始")
+          : chatUI.t(m.k === "restore" ? "復元" : "カット") + " " + (m.label || "");
+        var cls = "ed-hist" + (i === _edHistIdx ? " on" : "") + (i > _edHistIdx ? " future" : "");
+        var meta = cuts.length ? "✂" + cuts.length + " · " + edFmtClock(m.at || Date.now())
+                               : edFmtClock(m.at || Date.now());
+        return '<div class="' + cls + '" data-i="' + i + '">' +
+          '<span class="ic">' + (ICONS[m.k] || "✂") + "</span>" +
+          '<span class="lb">' + esc(label) + "</span>" +
+          '<span class="tm">' + esc(meta) + "</span></div>";
+      }).join("");
+    }
+    box.innerHTML = html;
+    box.querySelectorAll(".ed-hist[data-i]").forEach(function (row) {
       row.addEventListener("click", function () {
         edJumpHist(+row.getAttribute("data-i"));
       });
@@ -1870,7 +1908,9 @@
     "台本を取得しています…", "台本を取得できませんでした",
     "この動画には台本がありません（YouTube由来の動画のみ）", "ライブラリ機能は近日公開",
     "この行をカット", "復元", "書き出し中…", "書き出す",
-    "編集履歴はまだありません", "開始", "カット"];
+    "編集履歴はまだありません", "開始", "カット",
+    "AIの編集（生成時）", "あなたの編集", "字幕", "早送り", "巻き戻し",
+    "フリーズ", "ズーム", "モノクロ", "反転", "モザイク"];
   function collectI18nKeys() {
     var seen = {};
     ["data-i18n", "data-i18n-ph", "data-i18n-ph-narrow", "data-i18n-title", "data-i18n-prompt"].forEach(function (attr) {
