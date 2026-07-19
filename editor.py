@@ -192,6 +192,26 @@ class TimeMap:
         return max(0.0, t)
 
 
+def _resolve_caption_overlap(timed: list) -> tuple:
+    """
+    既定ゾーン（x/y無指定）の字幕同士の時間重なりを解決する。
+    timed: 開始秒でソート済みの [s, e, cap] のリスト（インプレースで変更）。
+    前の字幕の end を次の start に切り詰め、表示時間が無くなったものは除去。
+    x/y を明示した字幕は自由配置なので対象外。戻り: (切り詰め件数, 破棄件数)。
+    """
+    defaults = [it for it in timed
+                if it[2].get("x") is None and it[2].get("y") is None]
+    n_trunc = 0
+    for cur, nxt in zip(defaults, defaults[1:]):
+        if cur[1] > nxt[0]:
+            cur[1] = nxt[0]
+            n_trunc += 1
+    dead = [it for it in defaults if it[1] - it[0] <= 0.05]
+    for it in dead:
+        timed.remove(it)
+    return n_trunc, len(dead)
+
+
 def apply_cuts(video, cut_sections: list, log: LOG_CB):
     """
     cut_sections: [{"start": float, "end": float}]
@@ -813,25 +833,41 @@ def run_edit(video_path: str, analysis: dict,
     caps = [] if analysis.get("code_handled_captions") else analysis.get("captions", [])
     if analysis.get("code_handled_captions"):
         log("  💬 字幕はPython編集コードが描画済み → 既定字幕はスキップ")
+
+    # 字幕の秒数も元動画基準。カット・早送り等でズレた分を写像で吸収してから、
+    # 既定ゾーン（x/y無指定）同士の時間重なりを解決する。同じ座標に同時に2枚
+    # 出て文字が重なるのを防ぐ（AIが重なる秒を返す場合に加え、カット/フリーズの
+    # 写像で元は別々だった字幕が同時刻に潰れる場合もある）。
+    timed = []
     for cap in caps:
         t = cap.get("text", "")
-        fny = cap.get("funny", False)
         if not t or float(cap.get("end", 0)) <= float(cap.get("start", 0)):
             continue
-        # 字幕の秒数も元動画基準。カット・早送り等でズレた分をここで吸収する
-        # （以前は生の値をそのまま置いていたので、カットした分だけ字幕がズレていた）
         s = tmap.map(cap.get("start", 0))
         e = tmap.map(cap.get("end", 0))
         if e <= s:
             continue
         s = min(s, max(0.0, dur - 0.1))
         e = min(e, dur)
-        img = _caption_image(t, fny, fs_caption, style=font_style)
-        # 位置：AIが x/y（0〜1の比率）を指定したら尊重、無指定は従来の下部ゾーン中央
+        timed.append([s, e, cap])
+    timed.sort(key=lambda it: it[0])
+    n_trunc, n_drop = _resolve_caption_overlap(timed)
+    if n_trunc or n_drop:
+        log(f"  💬 字幕の時間重なりを解決: {n_trunc}件を切り詰め"
+            + (f"・{n_drop}件を省略" if n_drop else ""))
+
+    for s, e, cap in timed:
+        fny = cap.get("funny", False)
+        img = _caption_image(cap.get("text", ""), fny, fs_caption, style=font_style)
+        # 位置：AIが x/y（0〜1の比率）を指定したら尊重、無指定は従来の下部ゾーン中央。
+        # 折り返しでゾーンより高くなった字幕は、中央寄せだと上へ無制限にはみ出すので
+        # 下端アンカー（下マージン固定・上方向にだけ伸びる）に切り替える。
         x = "center"
         try:
             if cap.get("y") is not None:
                 y = int(min(max(float(cap["y"]), 0.0), 1.0) * (th - img.height))
+            elif img.height >= CAPTION_ZONE_H:
+                y = max(0, th - 20 - img.height)
             else:
                 y = th - CAPTION_ZONE_H + (CAPTION_ZONE_H - img.height) // 2
             if cap.get("x") is not None:
