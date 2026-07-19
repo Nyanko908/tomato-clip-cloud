@@ -76,6 +76,7 @@
     redo: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/>',
     share:'<path d="M12 16V3"/><path d="M8 7l4-4 4 4"/><path d="M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/>',
     copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+    pencil: '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
   };
   function _act(name, title, icon) {
     return '<button class="actbtn" data-act="' + name + '" title="' + title + '" aria-label="' + title + '"' +
@@ -159,7 +160,23 @@
       ensureThread();
       var d = document.createElement("div");
       d.className = "msg user";
-      d.innerHTML = '<div class="bubble">' + esc(text) + "</div>";
+      // ホバーでコピー／編集（編集＝本文を入力欄に戻して書き直せる）
+      d.innerHTML = '<div class="ubody"><div class="bubble">' + esc(text) + "</div>" +
+        '<div class="uacts">' + _act("ucopy", "コピー", _ICON.copy) +
+        _act("uedit", "編集", _ICON.pencil) + "</div></div>";
+      var bar = d.querySelector(".uacts");
+      bar.addEventListener("click", function (e) {
+        var btn = e.target.closest && e.target.closest(".actbtn");
+        if (!btn) return;
+        var txt = (d.querySelector(".bubble").innerText || "").trim();
+        if (btn.getAttribute("data-act") === "ucopy") {
+          _copy(txt); _flash(btn);
+        } else {
+          el.field.value = txt;
+          autogrow();
+          el.field.focus();
+        }
+      });
       el.thread.appendChild(d);
       scrollBottom();
     },
@@ -1083,21 +1100,62 @@
       var n = document.getElementById(panes[k]);
       if (n) n.style.display = (k === name) ? "" : "none";
     });
-    if (name === "library") {
-      var lb = document.getElementById("edLibrary");
-      if (lb) lb.innerHTML = '<div class="ed-empty">' + esc(chatUI.t("ライブラリ機能は近日公開")) + "</div>";
-    }
+    if (name === "library") edRenderLibrary();
     if (name === "script") edLoadScript();
     if (name === "edits") edRenderEdits();
     edApplySearch();
   }
 
-  // 検索欄：素材タブは名前、台本タブは本文で絞り込む
+  // ライブラリタブ：生成した動画の一覧（日時と長さつき）。クリックでエディタに読み込む
+  function edRenderLibrary() {
+    var box = document.getElementById("edLibrary");
+    if (!box) return;
+    var a = api();
+    if (!a || !a.list_videos) return;
+    a.list_videos().then(function (list) {
+      try { list = typeof list === "string" ? JSON.parse(list) : list; } catch (e) {}
+      list = list || [];
+      if (!list.length) {
+        box.innerHTML = '<div class="ed-empty">' + esc(chatUI.t("素材はまだありません")) + "</div>";
+        return;
+      }
+      box.innerHTML = list.map(function (v) {
+        var raw = String(v.path || "").replace(/\\/g, "/");
+        var src = (/^(https?:)?\/\//.test(raw) || raw.charAt(0) === "/") ? raw : "file:///" + raw;
+        var d = v.posted_at ? new Date(v.posted_at) : null;
+        var dt = (d && !isNaN(d)) ? ((d.getMonth() + 1) + "/" + d.getDate() + " " +
+                  pad2(d.getHours()) + ":" + pad2(d.getMinutes())) : "";
+        return '<div class="ed-lib-row" data-src="' + esc(src) + '" data-title="' + esc(v.title || "") +
+          '" data-vid="' + esc(v.id || "") + '">' +
+          '<div class="lthumb"><video src="' + esc(src) + '" preload="metadata" muted></video>' +
+          '<span class="dur"></span></div>' +
+          '<div class="lmeta"><div class="lname">' + esc(v.title || "動画") + "</div>" +
+          '<div class="ldate">' + esc(dt) + "</div></div></div>";
+      }).join("");
+      box.querySelectorAll(".ed-lib-row").forEach(function (row) {
+        var vd = row.querySelector("video"), dur = row.querySelector(".dur");
+        if (vd) vd.addEventListener("loadedmetadata", function () {
+          if (dur && isFinite(vd.duration) && vd.duration > 0) {
+            var s = Math.round(vd.duration);
+            dur.textContent = Math.floor(s / 60) + ":" + pad2(s % 60);
+          }
+        });
+        row.addEventListener("click", function () {
+          chatUI.openEditor(row.getAttribute("data-src"), row.getAttribute("data-title"),
+                            row.getAttribute("data-vid"));
+        });
+      });
+      edApplySearch();
+    }).catch(function () {});
+  }
+
+  // 検索欄：素材タブは名前、台本タブは本文、ライブラリはタイトルで絞り込む
   function edApplySearch() {
     var inp = document.getElementById("edSearch");
     var q = ((inp && inp.value) || "").trim().toLowerCase();
     var sel = _edTab === "script" ? "#edScript .ed-line" :
-              _edTab === "assets" ? "#edAssets .ed-asset" : null;
+              _edTab === "assets" ? "#edAssets .ed-asset" :
+              _edTab === "library" ? "#edLibrary .ed-lib-row" : null;
     if (!sel) return;
     document.querySelectorAll(sel).forEach(function (n) {
       n.style.display = (!q || (n.textContent || "").toLowerCase().indexOf(q) >= 0) ? "" : "none";

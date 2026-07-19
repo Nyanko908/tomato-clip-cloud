@@ -99,6 +99,12 @@
   .msg{display:flex;gap:12px;}
   .msg.user{justify-content:flex-end;}
   .msg.user .bubble{background:var(--userbub);border-radius:20px;padding:10px 16px;max-width:78%;white-space:pre-wrap;}
+  /* ユーザー発話：ホバーでコピー／編集（右寄せ・バブルの下） */
+  .msg.user .ubody{display:flex;flex-direction:column;align-items:flex-end;max-width:78%;}
+  .msg.user .ubody .bubble{max-width:100%;}
+  .msg.user .uacts{display:flex;gap:2px;margin-top:4px;opacity:0;transition:opacity .15s;}
+  .msg.user:hover .uacts,.msg.user .uacts:focus-within{opacity:1;}
+  @media (max-width:860px){.msg.user .uacts{opacity:1;}}
   .msg.ai{align-items:flex-start;}
   .ai-avatar{width:26px;height:26px;flex:0 0 26px;margin-top:2px;object-fit:contain;}
   .ai-body{flex:1;min-width:0;}
@@ -191,6 +197,21 @@
     text-overflow:ellipsis;white-space:nowrap;}
   .ed-asset.on .thumb{outline:2px solid var(--tomato);outline-offset:1px;}
   .ed-empty{grid-column:1/-1;color:var(--faint);font-size:12.5px;text-align:center;padding:22px 6px;}
+
+  /* ライブラリタブ：生成した動画の一覧（日時・長さつき） */
+  .ed-lib{flex:1;overflow-y:auto;padding:4px 8px 12px;}
+  .ed-lib-row{display:flex;gap:10px;align-items:center;padding:7px 6px;border-radius:10px;cursor:pointer;}
+  .ed-lib-row:hover{background:var(--hover);}
+  .ed-lib-row .lthumb{position:relative;flex:0 0 92px;aspect-ratio:16/9;border-radius:7px;
+    overflow:hidden;background:#000;border:1px solid var(--line);}
+  .ed-lib-row .lthumb video{width:100%;height:100%;object-fit:cover;display:block;}
+  .ed-lib-row .dur{position:absolute;right:3px;bottom:3px;background:rgba(0,0,0,.72);color:#fff;
+    font-size:9.5px;font-weight:600;padding:1px 4px;border-radius:3px;font-variant-numeric:tabular-nums;}
+  .ed-lib-row .lmeta{flex:1;min-width:0;}
+  .ed-lib-row .lname{font-size:12.5px;color:var(--ink);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;}
+  .ed-lib-row .ldate{font-size:11px;color:var(--faint);margin-top:2px;font-variant-numeric:tabular-nums;}
+  .ed-lib .ed-empty{padding:22px 6px;color:var(--faint);font-size:12.5px;text-align:center;}
 
   /* 台本タブ（ChatCut風・文字起こしベース編集）。行クリック=シーク、✕=カット */
   .ed-script{flex:1;overflow-y:auto;padding:4px 6px 12px;}
@@ -831,7 +852,7 @@
           <input type="text" id="edSearch" data-i18n-ph="検索" placeholder="検索">
         </div>
         <div class="ed-assets" id="edAssets"></div>
-        <div class="ed-assets" id="edLibrary" style="display:none"></div>
+        <div class="ed-lib" id="edLibrary" style="display:none"></div>
         <div class="ed-script" id="edScript" style="display:none"></div>
         <div class="ed-edits" id="edEdits" style="display:none"></div>
       </div>
