@@ -233,12 +233,16 @@
   .btn.primary:disabled:hover{background:var(--tomato);}
   .toolbtn:disabled{opacity:.35;cursor:default;}
 
-  /* 右：ビューア */
-  .ed-viewer{flex:1;display:flex;align-items:center;justify-content:center;min-width:0;
-    background:var(--panel);padding:18px;}
-  .ed-stage{position:relative;background:#000;border-radius:6px;overflow:hidden;
-    max-width:100%;max-height:100%;box-shadow:0 10px 40px rgba(0,0,0,.18);}
-  .ed-stage video{display:block;max-width:100%;max-height:100%;}
+  /* 右：ビューア。
+     ⚠️ .ed-stage を高さautoのまま max-height:100% にすると、video 側の
+     max-height:100% がパーセント解決できず（親がauto）、WebView2では
+     縦動画が幅いっぱい＋上下切り落としで描画された（実バグ）。
+     絶対配置で確定サイズを与え、パーセントの連鎖を断つ。 */
+  .ed-viewer{position:relative;flex:1;min-width:0;background:var(--panel);}
+  .ed-stage{position:absolute;inset:18px;display:flex;
+    align-items:center;justify-content:center;background:transparent;}
+  .ed-stage video{display:block;width:auto;height:auto;max-width:100%;max-height:100%;
+    background:#000;border-radius:6px;box-shadow:0 10px 40px rgba(0,0,0,.18);}
   .ed-stage:empty::after,.ed-stage.blank::after{content:"";}
 
   /* 下：タイムライン */
