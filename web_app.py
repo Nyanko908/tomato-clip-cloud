@@ -46,6 +46,8 @@ _DEFAULTS = {
     "source_preference": "prefer_original",
     # Python編集（AIがコードを書いて編集）。常時有効・障害時の切り戻し用スイッチ
     "python_edit": True,
+    # 素材のAI画像生成（NanoBanana）。検索で見つからない時のフォールバック
+    "ai_asset_gen": True,
 }
 
 

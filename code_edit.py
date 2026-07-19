@@ -472,7 +472,7 @@ def _plugin_context(log: LOG_CB) -> str:
     return ("\n".join(parts) + "\n") if parts else ""
 
 
-def _plan_assets(client, analysis: dict, log: LOG_CB) -> list:
+def _plan_assets(client, analysis: dict, log: LOG_CB, config: dict = None) -> list:
     """
     生成フローへの素材の自動組み込み：この動画にフリー素材（画像・効果音）を
     足すと映えるかをAIに判断させ、必要なら Commons から商用可のものだけ取得する。
@@ -490,8 +490,10 @@ def _plan_assets(client, analysis: dict, log: LOG_CB) -> list:
         "面白くなるか判断してください。\n"
         "- 本当に映えるときだけ。無関係な素材は貼らない。不要なら空配列。\n"
         "- 検索先は Wikimedia Commons。ヒットしやすい英語の検索語にすること。\n"
+        "- 画像は、検索で見つからない場合にAI生成するための英語プロンプト gen_prompt も添えること"
+        "（構図・スタイルまで具体的に。audioには不要）。\n"
         'JSONのみ返答: {"assets": [{"query": "英語の検索語", "kind": "image または audio", '
-        '"why": "動画のどこでどう使うか(短く)"}]}  最大2件\n\n'
+        '"why": "動画のどこでどう使うか(短く)", "gen_prompt": "画像生成用の英語プロンプト(任意)"}]}  最大2件\n\n'
         f"動画の内容: {json.dumps(brief, ensure_ascii=False)}"
     )
     try:
@@ -510,6 +512,12 @@ def _plan_assets(client, analysis: dict, log: LOG_CB) -> list:
                 continue
             log(f"🖼 素材を検索: {q}（{'効果音' if k == 'audio' else '画像'}）...")
             meta = tc_db.acquire(q, kind=k, log=log)
+            # 検索で見つからない画像は AI生成（NanoBanana）にフォールバック
+            if (meta is None and k == "image"
+                    and (config is None or config.get("ai_asset_gen", True))):
+                gp = str(w.get("gen_prompt", "")).strip() or q
+                log(f"🎨 見つからないので素材を生成中: {q} ...")
+                meta = tc_db.generate_asset(client, gp, name_hint=q, log=log)
             if meta:
                 meta = dict(meta)
                 meta["why"] = str(w.get("why", ""))[:60]
@@ -584,7 +592,7 @@ def apply_code_edit(client, src_path: str, analysis: dict, log: LOG_CB,
     # 生成フローへの素材の自動組み込み（必要と判断された時だけ検索・取得）
     fetched_assets = []
     try:
-        fetched_assets = _plan_assets(client, analysis, log)
+        fetched_assets = _plan_assets(client, analysis, log, config)
     except Exception:
         pass
 

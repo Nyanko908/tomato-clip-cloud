@@ -192,6 +192,93 @@ def acquire(query: str, kind: str = "image", log: LOG_CB = print) -> Optional[di
 
 
 # ════════════════════════════════════════════════════════
+#  AI画像生成（NanoBanana = Gemini画像生成モデル）
+# ════════════════════════════════════════════════════════
+# Nano Banana系。先頭から順に試す（モデル廃止で死なないためのチェーン）。
+# ⚠️ Gemini画像生成は無料枠キーだと limit:0＝一切使えない（実測）。有料プラン必須。
+_IMAGE_MODELS = ["gemini-3.1-flash-lite-image", "gemini-3.1-flash-image",
+                 "gemini-2.5-flash-image"]
+_used_image_model = None   # 一度成功したモデルを覚えて次回から先頭に
+
+
+def generate_asset(client, prompt: str, name_hint: str = "",
+                   log: LOG_CB = print) -> Optional[dict]:
+    """
+    Commons検索で見つからないピンポイント素材（例:「デカ盛りバーガーに驚く猫」）を
+    Gemini画像生成で作って TC_DB に保存する。自前生成＝ライセンスはクリーン
+    （meta に source:"ai_generated"・モデル名・生成プロンプトを記録、クレジット不要）。
+    失敗しても None を返すだけで生成フローは止めない。
+    """
+    global _used_image_model
+    prompt = (prompt or "").strip()
+    if not prompt:
+        return None
+    models = ([_used_image_model] if _used_image_model else []) + \
+             [m for m in _IMAGE_MODELS if m != _used_image_model]
+    blob, mime, used = None, "image/png", None
+    last_err = ""
+    for model in models:
+        try:
+            resp = client.models.generate_content(model=model, contents=prompt)
+            for part in resp.candidates[0].content.parts:
+                inline = getattr(part, "inline_data", None)
+                if inline and getattr(inline, "data", None):
+                    blob = inline.data
+                    mime = getattr(inline, "mime_type", "") or mime
+                    break
+            if blob is None:
+                raise ValueError("画像が返りませんでした")
+            if isinstance(blob, str):      # SDKによりbase64文字列で来る場合の保険
+                import base64
+                blob = base64.b64decode(blob)
+            used = model
+            _used_image_model = model
+            break
+        except Exception as e:
+            last_err = str(e)
+            # 無料枠キーは画像生成 limit:0（対象外）。他モデルを試しても無駄なので即中断
+            if "limit: 0" in last_err and "free_tier" in last_err:
+                log("⚠️ 画像生成はGemini有料プランのキーが必要です"
+                    "（無料枠は画像生成モデルの割当が0のため）。素材なしで続行します")
+                return None
+            continue
+    if blob is None:
+        log(f"⚠️ 画像生成に失敗（素材なしで続行）: {last_err[:100]}")
+        return None
+
+    name = _slug(name_hint or prompt)
+    folder = ASSETS_DIR / name
+    ext = ".jpg" if "jpeg" in mime else ".png"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"asset{ext}").write_bytes(blob)
+    except Exception as e:
+        log(f"⚠️ 生成画像の保存に失敗: {str(e)[:80]}")
+        return None
+    meta = {
+        "name": name,
+        "kind": "image",
+        "file": f"asset{ext}",
+        "query": name_hint or prompt[:60],
+        "title": (name_hint or prompt)[:80],
+        "page_url": "",
+        "source_url": "",
+        "source": "ai_generated",
+        "model": used,
+        "gen_prompt": prompt[:500],
+        "author": "AI生成 (Google Gemini)",
+        "license": "AI生成 (Google Gemini)",
+        "attribution_required": False,
+        "credit": "",
+        "retrieved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    (folder / "meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    log(f"🎨 素材を生成して保存: {name}（AI生成 / {used}）")
+    return meta
+
+
+# ════════════════════════════════════════════════════════
 #  一覧・参照（コード生成のINDEX注入と tc.asset() 用）
 # ════════════════════════════════════════════════════════
 def list_assets() -> list[dict]:
