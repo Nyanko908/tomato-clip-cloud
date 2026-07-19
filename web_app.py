@@ -48,6 +48,8 @@ _DEFAULTS = {
     "python_edit": True,
     # 素材のAI画像生成（NanoBanana）。検索で見つからない時のフォールバック
     "ai_asset_gen": True,
+    # 黒帯対策：背景を黒でなく動画自身の拡大ぼかしにする（Shorts標準の見た目）
+    "blur_background": True,
 }
 
 

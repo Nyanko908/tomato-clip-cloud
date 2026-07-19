@@ -1225,7 +1225,8 @@ def edit_video(video_path: str, analysis: dict,
                mosaic_enabled: bool = True,
                simple_bgm_path: str = "",
                simple_bgm_volume: float = 0.10,
-               watermark: bool = False) -> bool:
+               watermark: bool = False,
+               blur_background: bool = True) -> bool:
     log("🎬 動画編集開始...")
     try:
         from editor import run_edit
@@ -1252,6 +1253,7 @@ def edit_video(video_path: str, analysis: dict,
             simple_bgm_path=simple_bgm_path,
             simple_bgm_volume=simple_bgm_volume,
             watermark=watermark,
+            blur_background=blur_background,
         )
         return True
     except Exception as e:
@@ -1642,6 +1644,7 @@ def run_pipeline_from_url(url: str, config: dict, log: LOG_CB,
         simple_bgm_path    = config.get("simple_bgm_path", ""),
         simple_bgm_volume  = float(config.get("simple_bgm_volume", 0.10)),
         watermark          = bool(config.get("demo_mode", False)),
+        blur_background    = bool(config.get("blur_background", True)),
     )
     if not ok:
         log("❌ 編集失敗"); return
@@ -1937,6 +1940,7 @@ def run_pipeline(config: dict, log: LOG_CB,
             simple_bgm_path    = config.get("simple_bgm_path", ""),
             simple_bgm_volume  = float(config.get("simple_bgm_volume", 0.10)),
             watermark          = bool(config.get("demo_mode", False)),
+            blur_background    = bool(config.get("blur_background", True)),
         )
         if not ok:
             log("❌ 編集失敗 → スキップ")

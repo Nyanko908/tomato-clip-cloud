@@ -685,7 +685,8 @@ def run_edit(video_path: str, analysis: dict,
              mosaic_enabled: bool = True,
              simple_bgm_path: str = "",
              simple_bgm_volume: float = 0.10,
-             watermark: bool = False):
+             watermark: bool = False,
+             blur_background: bool = True):
 
     from moviepy.editor import (
         VideoFileClip, ColorClip, CompositeVideoClip, CompositeAudioClip,
@@ -954,7 +955,7 @@ def run_edit(video_path: str, analysis: dict,
                 bgm_path=simple_bgm_path, bgm_volume=simple_bgm_volume,
                 tw=tw, th=th, rw=rw, rh=rh, vx=vx, vy=vy, dur=dur,
                 out_path=out_path, preset=encode_preset, log=log,
-                out_fps=out_fps,
+                out_fps=out_fps, blur_background=blur_background,
             )
             done = True
         except Exception as e:
@@ -967,7 +968,7 @@ def run_edit(video_path: str, analysis: dict,
             bgm_path=simple_bgm_path, bgm_volume=simple_bgm_volume,
             tw=tw, th=th, scale=scale, vx=vx, vy=vy, dur=dur,
             out_path=out_path, preset=encode_preset, log=log,
-            out_fps=out_fps,
+            out_fps=out_fps, blur_background=blur_background,
         )
 
     log(f"✅ 編集完了: {Path(out_path).name}")
@@ -1082,7 +1083,7 @@ def _bgm_array(bgm_path: str, video_dur: float, volume: float, log) -> np.ndarra
 def _export_fast(cut, src_path, unmodified, overlays, caption_times,
                  narr_path, bgm_path, bgm_volume,
                  tw, th, rw, rh, vx, vy, dur,
-                 out_path, preset, log, out_fps=30):
+                 out_path, preset, log, out_fps=30, blur_background=True):
     """
     合成とエンコードを ffmpeg のフィルターグラフで一括実行する高速パス。
     映像エフェクト適用済みの cut を低解像度のまま中間ファイルへ書き、
@@ -1157,11 +1158,27 @@ def _export_fast(cut, src_path, unmodified, overlays, caption_times,
         for p in png_paths:
             cmd += ["-i", p]
 
-        parts = [
-            f"color=black:size={tw}x{th}:duration={dur:.3f}:rate={out_fps}[bg]",
-            f"[0:v]scale={rw}:{rh}[v0]",
-            f"[bg][v0]overlay={vx}:{vy}:eof_action=repeat[m0]",
-        ]
+        if blur_background:
+            # 黒帯対策：背景＝動画自身をフレーム全体に拡大→ぼかし→減光（Shorts標準の見た目）。
+            # [0:v] を背景と前景の2回使うので split が必須。減光は字幕・タイトルの可読性のため。
+            # ぼかしは低解像度でかけてから拡大する（フル解像度boxblurは書き出しが
+            # 1.9倍に伸びた実測あり。1/4解像度なら面積1/16＋拡大補間も追いぼかしになる）
+            bw, bh = tw // 4, th // 4
+            parts = [
+                "[0:v]split[bga][fga]",
+                f"[bga]fps={max(12, out_fps // 4)},"
+                f"scale={bw}:{bh}:force_original_aspect_ratio=increase,"
+                f"crop={bw}:{bh},boxblur=8:1,"
+                f"scale={tw}:{th}:flags=fast_bilinear,eq=brightness=-0.15[bg]",
+                f"[fga]scale={rw}:{rh}[v0]",
+                f"[bg][v0]overlay={vx}:{vy}:eof_action=repeat[m0]",
+            ]
+        else:
+            parts = [
+                f"color=black:size={tw}x{th}:duration={dur:.3f}:rate={out_fps}[bg]",
+                f"[0:v]scale={rw}:{rh}[v0]",
+                f"[bg][v0]overlay={vx}:{vy}:eof_action=repeat[m0]",
+            ]
         cur = "m0"
         for i, (img, x, y, s, e) in enumerate(overlays):
             xo = "(W-w)/2" if x == "center" else str(int(x))
@@ -1190,7 +1207,7 @@ def _export_fast(cut, src_path, unmodified, overlays, caption_times,
 def _export_moviepy(cut, overlays, caption_times, analysis, narr_path,
                     bgm_path, bgm_volume,
                     tw, th, scale, vx, vy, dur,
-                    out_path, preset, log, out_fps=30):
+                    out_path, preset, log, out_fps=30, blur_background=True):
     """従来方式（moviepy全合成）。テンプレート演出や高速パス失敗時に使用"""
     from moviepy.editor import (
         ColorClip, CompositeVideoClip, CompositeAudioClip,
@@ -1200,7 +1217,21 @@ def _export_moviepy(cut, overlays, caption_times, analysis, narr_path,
 
     log("[6/7] 従来方式で合成中...")
     resized = cut.resize(scale)
-    bg   = ColorClip(size=(tw, th), color=[0, 0, 0]).set_duration(dur)
+    if blur_background:
+        # 黒帯対策：背景＝動画自身の拡大ぼかし＋減光。フルサイズのGaussianBlurは
+        # 毎フレーム激重なので「小さく縮小→カバーサイズへ拡大」で代用する
+        # （拡大補間そのものがぼかしになる。モザイクの縮小トリックと同じ発想）。
+        vw, vh = cut.size
+        factor = max(tw / vw, th / vh)
+        bw, bh = int(vw * factor) + 2, int(vh * factor) + 2
+        bg = (cut.without_audio()
+                 .resize(width=64)
+                 .resize((bw, bh))
+                 .fl_image(lambda f: (f * 0.55).astype("uint8"))   # 減光
+                 .set_position(((tw - bw) // 2, (th - bh) // 2))
+                 .set_duration(dur))
+    else:
+        bg = ColorClip(size=(tw, th), color=[0, 0, 0]).set_duration(dur)
     base = CompositeVideoClip([bg, resized.set_position((vx, vy))], size=(tw, th))
     all_clips = [base]
 
