@@ -199,6 +199,7 @@ def acquire(query: str, kind: str = "image", log: LOG_CB = print) -> Optional[di
 _IMAGE_MODELS = ["gemini-3.1-flash-lite-image", "gemini-3.1-flash-image",
                  "gemini-2.5-flash-image"]
 _used_image_model = None   # 一度成功したモデルを覚えて次回から先頭に
+_gen_disabled = False      # 無料枠(limit:0)を一度検知したら、以後このプロセスでは生成を撃たない
 
 
 def generate_asset(client, prompt: str, name_hint: str = "",
@@ -209,9 +210,9 @@ def generate_asset(client, prompt: str, name_hint: str = "",
     （meta に source:"ai_generated"・モデル名・生成プロンプトを記録、クレジット不要）。
     失敗しても None を返すだけで生成フローは止めない。
     """
-    global _used_image_model
+    global _used_image_model, _gen_disabled
     prompt = (prompt or "").strip()
-    if not prompt:
+    if not prompt or _gen_disabled:
         return None
     models = ([_used_image_model] if _used_image_model else []) + \
              [m for m in _IMAGE_MODELS if m != _used_image_model]
@@ -238,6 +239,7 @@ def generate_asset(client, prompt: str, name_hint: str = "",
             last_err = str(e)
             # 無料枠キーは画像生成 limit:0（対象外）。他モデルを試しても無駄なので即中断
             if "limit: 0" in last_err and "free_tier" in last_err:
+                _gen_disabled = True   # 以後の生成呼び出しは無駄なのでこのプロセスでは止める
                 log("⚠️ 画像生成はGemini有料プランのキーが必要です"
                     "（無料枠は画像生成モデルの割当が0のため）。素材なしで続行します")
                 return None

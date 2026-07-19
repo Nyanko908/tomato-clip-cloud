@@ -780,6 +780,8 @@ class Api:
         def _work():
             out = self._run_export(src, ranges)
             if out:
+                # 編集DNA還流：手動カット＝AIの編集への最も純度の高いフィードバック
+                self._record_manual_cuts(video_id, title, ranges)
                 self._on_ai_video({"path": out, "id": "",
                                    "title": f"{title}（編集版）",
                                    "subtitle": "台本編集のカットを適用しました"})
@@ -789,6 +791,47 @@ class Api:
                 self._js("addError", "書き出しに失敗しました")
         threading.Thread(target=_work, daemon=True).start()
         return {"ok": True}
+
+    def _record_manual_cuts(self, video_id, title, ranges):
+        """
+        台本編集の手動カットを learning_log に記録する（編集DNA還流の第一歩）。
+        カット区間に重なる字幕テキストも保存し、次回生成のプロンプトで
+        「こういう部分は最初から入れない」学習材料になる（pipeline._manual_cut_context）。
+        書き出し成功時のみ呼ばれる。失敗しても本流は止めない。
+        """
+        try:
+            import db
+            db.init_db()
+            row = db.get_conn().execute(
+                "SELECT meta_json FROM videos WHERE id=?", (str(video_id),)).fetchone()
+            meta = json.loads(row["meta_json"] or "{}") if row else {}
+            # 字幕は元動画基準 → 出力動画基準へ写像してからカット区間と突合
+            try:
+                tmap, _cuts = self._build_timemap(meta)
+                _map = tmap.map
+            except Exception:
+                _map = lambda t: t
+            cut_texts = []
+            for cap in meta.get("captions") or []:
+                try:
+                    o = _map(float(cap.get("start", 0)))
+                    o2 = _map(float(cap.get("end", 0)))
+                except (TypeError, ValueError):
+                    continue
+                if any(o < e and s < o2 for s, e in ranges):
+                    t = str(cap.get("text", "")).strip()
+                    if t and t not in cut_texts:
+                        cut_texts.append(t)
+            db.log_learning(
+                str(video_id), str(title or "")[:60],
+                edit_changes=json.dumps(
+                    {"mode": "script_edit",
+                     "cuts": [{"s": round(float(s), 2), "e": round(float(e), 2)}
+                              for s, e in ranges],
+                     "cut_texts": cut_texts[:10]}, ensure_ascii=False),
+                feedback_text="手動カット（台本編集）")
+        except Exception:
+            pass
 
     @staticmethod
     def _run_export(src, ranges):

@@ -944,6 +944,37 @@ def _fix_text_language(client, data: dict, lang: str, log: LOG_CB) -> dict:
     return data
 
 
+def _manual_cut_context() -> str:
+    """
+    編集DNA還流：台本編集でユーザーが手動カットした行（learning_log.edit_changes）の
+    ダイジェストを解析プロンプトに注入する。記録ゼロなら空文字＝完全に従来動作。
+    ユーザーがAIの完成動画から切った部分＝編集への最も純度の高いダメ出し。
+    """
+    try:
+        import db
+        logs = db.get_learning_logs(20)
+    except Exception:
+        return ""
+    texts = []
+    for l in logs:
+        try:
+            ec = json.loads(l.get("edit_changes") or "{}")
+        except Exception:
+            continue
+        if ec.get("mode") != "script_edit":
+            continue
+        for t in ec.get("cut_texts") or []:
+            t = str(t).strip()
+            if t and t not in texts:
+                texts.append(t)
+    if not texts:
+        return ""
+    digest = " ／ ".join(texts[:15])[:500]
+    return ("\n【ユーザーが過去に手動でカットした部分（重要な学習データ）】\n"
+            f"{digest}\n"
+            "→ この種の内容の区間は、最初からカットするか大幅に短くすること。\n")
+
+
 def analyze_video(model, video_path: str, log: LOG_CB, gemini_rot=None, chat_context: str = "",
                   output_lang: str = "ja") -> dict:
     log("🔬 Gemini で動画解析中...")
@@ -965,6 +996,9 @@ def analyze_video(model, video_path: str, log: LOG_CB, gemini_rot=None, chat_con
 
     from channel_learner import build_learning_prompt_context
     learning_ctx = build_learning_prompt_context()
+    manual_ctx = _manual_cut_context()
+    if manual_ctx:
+        log("  🧬 過去の手動カットを学習データとして注入")
 
     ctx_block = ""
     if chat_context:
@@ -987,7 +1021,7 @@ def analyze_video(model, video_path: str, log: LOG_CB, gemini_rot=None, chat_con
         f"{_LANG_NAMES.get(output_lang, '日本語')}で書いてください。\n"
     )
 
-    prompt = learning_ctx + ctx_block + font_block + lang_header + """
+    prompt = learning_ctx + manual_ctx + ctx_block + font_block + lang_header + """
 この動画を分析して、以下のJSONのみ返答してください（コードブロック不要）。
 
 {
