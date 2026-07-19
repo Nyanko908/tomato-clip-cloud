@@ -222,7 +222,7 @@
         '<div class="gen-hd"><span class="gen-spark"><i></i><i></i><i></i></span>' +
         '<span class="ttl">' + esc(title || chatUI.t("動画を作成しています")) + "</span></div>" +
         '<div class="gen-step">' + esc(chatUI.t("準備しています…")) + "</div>" +
-        '<div class="gen-canvas">' +
+        '<div class="gen-canvas"><div class="gen-workspace"><div class="gen-topbar"><b>TOMATO AI</b> EDIT DESK</div><div class="gen-scene"><div class="gen-searchbox"><span class="rainbow">SEARCH</span> &nbsp;[ TYPE HERE ]</div></div><span class="ai-cursor arrow"></span></div>' +
         '<button class="gen-preview" type="button">' + esc(chatUI.t("プレビューを見る")) + "</button>" +
         "</div></div></div>";
       el.thread.appendChild(d);
@@ -240,6 +240,27 @@
       if (s) s.textContent = stepText;
       scrollBottom();
     },
+    genStage: function (id, ev) {
+      var c=document.getElementById(id); if(!c||!ev)return;
+      var scene=c.querySelector('.gen-scene'), cursor=c.querySelector('.ai-cursor'), step=c.querySelector('.gen-step'); if(!scene||!cursor)return;
+      if(c._genTypeTimer){clearInterval(c._genTypeTimer);c._genTypeTimer=null;}
+      var typeText=function(node,value){var i=0,text=String(value||'');node.textContent='';c._genTypeTimer=setInterval(function(){node.textContent+=text.charAt(i++);if(i>=text.length){clearInterval(c._genTypeTimer);c._genTypeTimer=null;}},Math.max(22,Math.min(58,Math.floor(520/Math.max(text.length,1)))));};
+      var set=function(html,kind,text,drag){scene.innerHTML=html;cursor.className='ai-cursor '+kind;c.classList.toggle('gen-dragging',!!drag);if(step&&text)step.textContent=text;};
+      var query=esc(ev.query||'動画素材を検索');
+      if(ev.ev==='search'||ev.ev==='asset'){c._genCandidates=[];set('<div class="gen-searchbox"><span class="rainbow">SEARCH</span> &nbsp;[ TYPE HERE ]</div><span class="gen-query">'+query+'</span>','ibeam','Tomato AI が素材を検索しています…');}
+      else if(ev.ev==='candidate'){c._genCandidates=c._genCandidates||[];c._genCandidates.push(ev.title||'動画候補');}
+      else if(ev.ev==='found'){var names=c._genCandidates&&c._genCandidates.length?c._genCandidates:['関連するハイライト','視聴者の反応','注目シーン','ベストモーメント','候補を確認中'];set('<div class="gen-searchbox"><span class="rainbow">SEARCH RESULTS</span></div><div class="gen-results">'+names.slice(0,5).map(function(n){return '<div class="gen-result">'+esc(n)+'</div>';}).join('')+'</div>','scan','候補を集めています');}
+      else if(ev.ev==='scoring'){set('<div class="gen-searchbox"><span class="rainbow">SCORING RESULTS</span></div><div class="gen-results"><div class="gen-result selected">最適な素材を選別中</div></div><div class="gen-score"><i></i></div>','scan','AI が候補をスコアリングしています');}
+      else if(ev.ev==='top'){set('<div class="gen-searchbox"><span class="rainbow">BEST MATCH</span></div><div class="gen-results"><div class="gen-result selected">'+esc(ev.title||'選択した動画')+'</div></div><div class="gen-clip">切り抜き範囲を決定<div class="gen-playbar"><i></i></div></div>','scan','最適なシーンをダブルタップしました');}
+      else if(ev.ev==='clip'||ev.ev==='download'){set('<div class="gen-clip">'+esc((ev.start||'00:00')+' — '+(ev.end||'00:30'))+'<div class="gen-playbar"><i></i></div></div><div class="gen-drop">↓</div>','hand','素材を切り抜いています');}
+      else if(ev.ev==='downloaded'||ev.ev==='analyze'){set('<div class="gen-clip">切り抜き完了<div class="gen-playbar"><i></i></div></div><div class="gen-drop ready">↓</div>','hand','素材を編集デスクへドラッグしています',true);}
+      else if(ev.ev==='gemini_text'){set('<div class="gen-caption"><small>GEMINI · '+esc(ev.label||'TEXT')+'</small><span class="gen-live-text"></span></div>','ibeam','Gemini の編集テキストを入力しています');typeText(scene.querySelector('.gen-live-text'),ev.text);}
+      else if(ev.ev==='captions'){var caps=Array.isArray(ev.items)?ev.items.filter(Boolean):[];set('<div class="gen-caption"><small>GEMINI · CAPTION 01</small><span class="gen-live-text"></span></div>','ibeam','Gemini が生成した字幕を入力しています');typeText(scene.querySelector('.gen-live-text'),caps[0]||'');}
+      else if(ev.ev==='captions_stage'||ev.ev==='analyzed'){set('<div class="gen-terminal"><span class="prompt">[GEMINI]</span><span class="run"> captions are being prepared…</span></div>','ibeam','Gemini に字幕を作成させています');}
+      else if(ev.ev==='pyedit'||ev.ev==='pylog'){set('<div class="gen-terminal"><span class="prompt">[&gt;_]</span><span class="run"> python edit_timeline.py\n  applying cuts, captions, effects…</span></div>','code',ev.text||'Python で編集内容を適用しています');}
+      else if(ev.ev==='pyedit_done'||ev.ev==='render'||ev.ev==='export'){set('<div class="gen-terminal"><span class="prompt">[&gt;_]</span> edit complete</div><div class="gen-timeline"><div class="gen-track"></div><div class="gen-track"></div></div>','arrow',ev.ev==='export'?'動画を書き出しています':'タイムラインをレンダリングしています');}
+      scrollBottom();
+    },
     finishProgress: function (id, title) {
       var c = document.getElementById(id);
       if (!c) return;
@@ -249,6 +270,7 @@
         esc(title || chatUI.t("完了")) + "</span>";
       var st = c.querySelector(".gen-step");
       if (st) st.remove();
+      var cursor=c.querySelector('.ai-cursor');if(cursor)cursor.className='ai-cursor arrow';if(c._genTypeTimer){clearInterval(c._genTypeTimer);c._genTypeTimer=null;}
     },
     // 「プレビューを見る」→ 右からエディタをスライドイン
     openPreview: function (id, src, title) {

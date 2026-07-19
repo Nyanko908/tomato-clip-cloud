@@ -1176,6 +1176,12 @@ def analyze_video(model, video_path: str, log: LOG_CB, gemini_rot=None, chat_con
             except Exception: pass
             # 保険: 字幕が出力言語になっていなければ書き直す（逐語書き起こし対策）
             data = _fix_text_language(current_client, data, output_lang, log)
+            # UIへ渡すのは確定済みの結果のみ。内部推論は表示しない。
+            _ui_captions = [str(c.get("text", "")) for c in data.get("captions", [])
+                            if isinstance(c, dict) and c.get("text")][:3]
+            if _ui_captions:
+                log("@@EV " + json.dumps({"ev": "captions", "items": _ui_captions},
+                                           ensure_ascii=False))
             return data
         except Exception as e:
             err = str(e)

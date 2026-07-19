@@ -130,6 +130,42 @@ def _tools():
     ])]
 
 
+import re as _re
+
+
+def _stage_from_log(s: str):
+    """パイプラインのログを、実処理と同期する UI 演出イベントへ変換する。"""
+    t = s.strip()
+    m = _re.search(r"指定テーマで検索:\s*(.+)$", t)
+    if m: return {"ev": "search", "query": m.group(1).strip()}
+    m = _re.search(r"AI検索:\s*'([^']+)'", t)
+    if m: return {"ev": "search", "query": m.group(1)}
+    if "件発見" in t and "合計" in t: return {"ev": "found"}
+    if "AI スコアリング中" in t: return {"ev": "scoring"}
+    m = _re.match(r"•\s*(.+?)\s*\(スコア", t)
+    if m: return {"ev": "candidate", "title": m.group(1)}
+    m = _re.search(r"スコアリング完了 \(Top:\s*(.+?)\s*/", t)
+    if m: return {"ev": "top", "title": m.group(1)}
+    m = _re.search(r"ダウンロード中（(\d{2}:\d{2})–(\d{2}:\d{2})", t)
+    if m: return {"ev": "clip", "start": m.group(1), "end": m.group(2)}
+    if t.startswith("⬇️") and "ダウンロード中" in t: return {"ev": "download"}
+    if "DL完了" in t: return {"ev": "downloaded"}
+    if "Gemini 動画解析中" in t: return {"ev": "analyze"}
+    if "解析完了" in t and "✅" in t: return {"ev": "analyzed"}
+    m = _re.match(r"📝\s*(タイトル|サブタイトル|ナレーション):\s*(.+)$", t.lstrip())
+    if m: return {"ev": "gemini_text", "label": m.group(1), "text": m.group(2).rstrip(".")}
+    m = _re.search(r"🖼 素材を検索:\s*(.+?)（", t)
+    if m: return {"ev": "asset", "query": m.group(1)}
+    if t.startswith("🎨"): return {"ev": "asset_gen"}
+    if t.startswith("🐍 Python編集:"): return {"ev": "pyedit"}
+    if t.startswith("🐍 "): return {"ev": "pylog", "text": t[2:].strip()}
+    if "Python編集完了" in t: return {"ev": "pyedit_done"}
+    if "🎬 動画編集中" in t: return {"ev": "render"}
+    if t.startswith("[4/7]"): return {"ev": "captions_stage"}
+    if t.startswith("[7/7]") or "書き出し中" in t: return {"ev": "export"}
+    return None
+
+
 class ChatEngine:
     def __init__(self, config: dict, get_license, callbacks: dict):
         self.config = config
@@ -276,7 +312,17 @@ class ChatEngine:
         produced = {"n": 0, "last": None}
 
         def log(msg):
-            self._emit("on_progress", pid, str(msg))
+            s = str(msg)
+            if s.startswith("@@EV "):
+                try:
+                    self._emit("on_stage", pid, json.loads(s[5:]))
+                except Exception:
+                    pass
+                return
+            ev = _stage_from_log(s)
+            if ev:
+                self._emit("on_stage", pid, ev)
+            self._emit("on_progress", pid, s)
 
         def on_ready(path, analysis=None, *a, **k):
             produced["n"] += 1

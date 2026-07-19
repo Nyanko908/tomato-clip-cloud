@@ -9,12 +9,17 @@
 フロントは既存 webui/ を無改変で再利用し、<head> に bridge.js（fetchシム）を注入する。
 """
 import json
+import base64
+import hashlib
+import hmac
+import os
 import threading
+import time
 from pathlib import Path
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response, RedirectResponse
 
 from server import config as cloudcfg
 
@@ -24,6 +29,22 @@ import web_app
 _ROOT = Path(__file__).resolve().parent.parent
 _WEBUI = _ROOT / "webui"
 _BRIDGE = Path(__file__).resolve().parent / "static" / "bridge.js"
+_SESSION_COOKIE = "tomato_web_session"
+_SESSION_MAX_AGE = 12 * 60 * 60
+
+def _session_value(secret: str) -> str:
+    issued = str(int(time.time()))
+    sig = hmac.new(secret.encode("utf-8"), issued.encode("ascii"), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode((issued + "." + sig).encode("ascii")).decode("ascii")
+
+def _valid_session(value: str, secret: str) -> bool:
+    try:
+        issued, sig = base64.urlsafe_b64decode(value.encode("ascii")).decode("ascii").split(".", 1)
+        if time.time() - int(issued) > _SESSION_MAX_AGE: return False
+        expected = hmac.new(secret.encode("utf-8"), issued.encode("ascii"), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(sig, expected)
+    except Exception:
+        return False
 
 
 class CloudApi(web_app.Api):
@@ -157,19 +178,42 @@ def create_app() -> FastAPI:
     api = CloudApi()   # ← ここで load_config が走り TOMATO_ACCOUNT_PLAN が設定される
     app.state.api = api
     pro_ok = cloudcfg.is_pro_allowed()
+    web_password = os.environ.get("TOMATO_WEB_PASSWORD", "").strip()
+    if pro_ok and not web_password:
+        raise RuntimeError("TOMATO_WEB_PASSWORD must be set for a Pro cloud deployment")
+    def authenticated(request: Request) -> bool:
+        return bool(web_password) and _valid_session(request.cookies.get(_SESSION_COOKIE, ""), web_password)
+    def login_page(error=False):
+        msg = "<p style='color:#b42318'>パスワードが正しくありません。</p>" if error else ""
+        return HTMLResponse("<!doctype html><meta charset='utf-8'><title>Tomato Clip</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#fff8f5;color:#231815;font:16px system-ui,sans-serif}.box{width:min(360px,calc(100vw - 40px));padding:28px;border:1px solid #f2cabe;border-radius:18px;background:#fff;box-shadow:0 14px 45px #d35a3522}input,button{box-sizing:border-box;width:100%;padding:11px 13px;border-radius:9px;font:inherit}input{border:1px solid #d8c7c1;margin:10px 0}button{border:0;background:#e64a2e;color:#fff;font-weight:700;cursor:pointer}</style><main class='box'><h1>Tomato Clip</h1><p>この編集デスクは保護されています。</p>"+msg+"<form method='post' action='/login'><input name='password' type='password' autocomplete='current-password' autofocus required placeholder='パスワード'><button type='submit'>開く</button></form></main>")
     if not pro_ok:
         import sys as _sys
         print("[web] 非Proアカウントのためクラウドをブロックします（勧誘ページを表示）", file=_sys.stderr)
 
-    # 生成物の配信先を用意（無いと StaticFiles がマウントで失敗する）
+    # StaticFilesでは認証できないため、動画は下のルートで確認して配信する。
     out_root = cloudcfg.output_root()
     out_root.mkdir(parents=True, exist_ok=True)
-    app.mount("/media", StaticFiles(directory=str(out_root)), name="media")
+    @app.get("/login", response_class=HTMLResponse)
+    def login(request: Request):
+        return RedirectResponse("/", status_code=303) if pro_ok and authenticated(request) else login_page()
+    @app.post("/login")
+    async def login_submit(request: Request):
+        supplied = (parse_qs((await request.body()).decode("utf-8", "ignore")).get("password") or [""])[0]
+        if not pro_ok or not hmac.compare_digest(supplied, web_password): return login_page(True)
+        response = RedirectResponse("/", status_code=303)
+        secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        response.set_cookie(_SESSION_COOKIE, _session_value(web_password), max_age=_SESSION_MAX_AGE, httponly=True, samesite="strict", secure=secure, path="/")
+        return response
+    @app.post("/logout")
+    def logout():
+        response = JSONResponse({"ok": True}); response.delete_cookie(_SESSION_COOKIE, path="/"); return response
 
     @app.get("/", response_class=HTMLResponse)
-    def index():
+    def index(request: Request):
         if not pro_ok:
             return HTMLResponse(cloudcfg.upsell_html())
+        if not authenticated(request):
+            return RedirectResponse("/login", status_code=303)
         html = (_WEBUI / "index.html").read_text(encoding="utf-8")
         # <head> に bridge.js を注入（app.js より前に window.pywebview を用意）
         html = html.replace("</head>", '  <script src="/bridge.js"></script>\n</head>', 1)
@@ -190,12 +234,21 @@ def create_app() -> FastAPI:
     @app.get("/healthz")
     def health():
         return {"ok": True}
+    @app.get("/media/{path:path}")
+    def media(path: str, request: Request):
+        if not pro_ok or not authenticated(request): return Response(status_code=401)
+        try:
+            candidate = (out_root / path).resolve(); candidate.relative_to(out_root.resolve())
+        except (ValueError, OSError): return Response(status_code=404)
+        return FileResponse(str(candidate)) if candidate.is_file() else Response(status_code=404)
 
     @app.post("/api/{name}")
-    def api_call(name: str, body: dict = None):
+    def api_call(name: str, request: Request, body: dict = None):
         if not pro_ok:
             return JSONResponse({"error": "pro_required",
                                  "message": "クラウドは Pro プラン限定です"}, status_code=403)
+        if not authenticated(request):
+            return JSONResponse({"error": "authentication_required"}, status_code=401)
         if name not in _ALLOWED:
             return JSONResponse({"error": "unknown method"}, status_code=404)
         args = (body or {}).get("args", []) if isinstance(body, dict) else []
