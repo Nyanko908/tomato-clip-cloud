@@ -107,6 +107,14 @@ class _MediaHTTPHandler(_http_server.SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def handle_one_request(self):
+        # 動画のシーク・停止でクライアントが接続を切るのは正常。
+        # 放置するとスレッドごとに派手なTracebackがコンソールに出るので握る。
+        try:
+            super().handle_one_request()
+        except (ConnectionError, BrokenPipeError, TimeoutError):
+            self.close_connection = True
+
     def send_head(self):
         path = self.translate_path(self.path)
         if os.path.isdir(path):
