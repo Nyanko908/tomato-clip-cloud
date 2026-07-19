@@ -472,7 +472,55 @@ def _plugin_context(log: LOG_CB) -> str:
     return ("\n".join(parts) + "\n") if parts else ""
 
 
-def _build_prompt(analysis: dict, duration: float, lang: str, feedback: str, log: LOG_CB) -> str:
+def _plan_assets(client, analysis: dict, log: LOG_CB) -> list:
+    """
+    生成フローへの素材の自動組み込み：この動画にフリー素材（画像・効果音）を
+    足すと映えるかをAIに判断させ、必要なら Commons から商用可のものだけ取得する。
+    例:「デカポ美味しい！」→ 食べ物画像を検索→取得→編集コードが動きを付けて貼る。
+    不要と判断されれば空。失敗しても生成は止めない。最大2件。
+    """
+    from pipeline import _gemini_call
+    brief = {
+        "title": analysis.get("title", ""),
+        "subtitle": analysis.get("subtitle", ""),
+        "captions": [c.get("text", "") for c in analysis.get("captions", [])[:8]],
+    }
+    prompt = (
+        "ショート動画の編集準備。この動画に、フリー素材（画像・効果音）を足すと"
+        "面白くなるか判断してください。\n"
+        "- 本当に映えるときだけ。無関係な素材は貼らない。不要なら空配列。\n"
+        "- 検索先は Wikimedia Commons。ヒットしやすい英語の検索語にすること。\n"
+        'JSONのみ返答: {"assets": [{"query": "英語の検索語", "kind": "image または audio", '
+        '"why": "動画のどこでどう使うか(短く)"}]}  最大2件\n\n'
+        f"動画の内容: {json.dumps(brief, ensure_ascii=False)}"
+    )
+    try:
+        raw = _gemini_call(client, prompt)
+        txt = re.sub(r"^```(?:json)?|```$", "", (raw or "").strip(), flags=re.M).strip()
+        wants = (json.loads(txt) or {}).get("assets") or []
+    except Exception:
+        return []
+    out = []
+    try:
+        import tc_db
+        for w in wants[:2]:
+            q = str(w.get("query", "")).strip()
+            k = "audio" if str(w.get("kind", "")).lower() == "audio" else "image"
+            if not q:
+                continue
+            log(f"🖼 素材を検索: {q}（{'効果音' if k == 'audio' else '画像'}）...")
+            meta = tc_db.acquire(q, kind=k, log=log)
+            if meta:
+                meta = dict(meta)
+                meta["why"] = str(w.get("why", ""))[:60]
+                out.append(meta)
+    except Exception:
+        pass
+    return out
+
+
+def _build_prompt(analysis: dict, duration: float, lang: str, feedback: str, log: LOG_CB,
+                  fetched_assets: list = None) -> str:
     brief = {
         "title": analysis.get("title", ""),
         "duration_sec": round(duration, 1),
@@ -484,12 +532,19 @@ def _build_prompt(analysis: dict, duration: float, lang: str, feedback: str, log
         "captions_sec": [[c.get("start"), c.get("end")] for c in analysis.get("captions", [])[:20]],
     }
     fb = f"\n【前回の失敗】この原因を直すこと:\n{feedback}\n" if feedback else ""
+    fa = ""
+    if fetched_assets:
+        fa = ("\n【この動画のために取得した素材（ライセンス確認済み・tc.asset(\"名前\")でパス取得）】\n"
+              + "\n".join(f'- "{m["name"]}" | {m["kind"]} | {m["license"]} | 用途案: {m.get("why", "")}'
+                          for m in fetched_assets)
+              + "\n素材はただ置かず、Pythonで動き（スライドイン・ポップ・フェード・揺れ等）を"
+                "付けて馴染ませること。tc.log で何をしたか一言添えること。\n")
     return f"""あなたはショート動画の編集者です。以下の解析結果をもとに、この動画を
 最も面白く仕上げる Python の編集コードを書いてください。
 
 {_SDK_DOC}
 {_SAMPLES}
-{_plugin_context(log)}
+{_plugin_context(log)}{fa}
 【この動画の解析結果】（時刻は元動画の秒）
 {json.dumps(brief, ensure_ascii=False)}
 
@@ -526,11 +581,19 @@ def apply_code_edit(client, src_path: str, analysis: dict, log: LOG_CB,
     lang = (analysis.get("output_language") or "ja")
     out_path = str(Path(src_path).with_name(Path(src_path).stem + "_pyedit.mp4"))
 
+    # 生成フローへの素材の自動組み込み（必要と判断された時だけ検索・取得）
+    fetched_assets = []
+    try:
+        fetched_assets = _plan_assets(client, analysis, log)
+    except Exception:
+        pass
+
     log("🐍 Python編集: AIが編集コードを書いています...")
     feedback = ""
     for attempt in range(1, 4):
         try:
-            raw = _gemini_call(client, _build_prompt(analysis, duration, lang, feedback, log))
+            raw = _gemini_call(client, _build_prompt(analysis, duration, lang, feedback, log,
+                                                     fetched_assets=fetched_assets))
         except Exception as e:
             log(f"⚠️ Python編集: コード生成に失敗（従来編集で続行）: {str(e)[:100]}")
             return False
