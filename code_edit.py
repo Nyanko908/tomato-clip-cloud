@@ -121,6 +121,18 @@ class TC:
         self.ops = []          # [{"op":"cuts"|"speed"|"insert", ...}] 適用済み座標で記録
         self.captions = list(captions or [])   # 解析結果の字幕（text/start/end/funny）
         self.handled_captions = False          # True=字幕はコードが描いた（既定字幕を置かない）
+        self.reported = []                     # tc.report()による自己申告（自由コード用）
+
+    def report(self, edit_report: dict):
+        """
+        自由コードで尺を変えた時の自己申告（「制限」ではなく「記録・検証」方式）。
+        {"cuts":[{"start","end"}], "speeds":[{"start","end","factor"}],
+         "inserts":[{"at","dur"}]} を元動画の秒で申告する。
+        実行後にシステムが「申告から計算した尺」と「実際の尺」を突き合わせ、
+        合わなければその試行は失敗として書き直しになる。
+        """
+        if isinstance(edit_report, dict):
+            self.reported.append(edit_report)
 
     def log(self, msg):
         self._log(f"  🐍 {msg}")
@@ -213,6 +225,35 @@ class TC:
         return self._tmap.map(src_sec)
 
 
+def _apply_report(tmap, ops, rep):
+    """自己申告（元動画の秒）を TimeMap／オペログへ合成する。tc と同じ写像規則。"""
+    for c in rep.get("cuts") or []:
+        try:
+            s, e = tmap.map(float(c["start"])), tmap.map(float(c["end"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if e > s:
+            tmap.add_cuts([{"start": s, "end": e}])
+            ops.append({"op": "cuts", "ranges": [[s, e]]})
+    for sp in rep.get("speeds") or []:
+        try:
+            s, e = tmap.map(float(sp["start"])), tmap.map(float(sp["end"]))
+            f = float(sp.get("factor", 2.0))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if e > s and f > 0:
+            tmap.add_speed(s, e, f)
+            ops.append({"op": "speed", "s": s, "e": e, "f": f})
+    for ins in rep.get("inserts") or []:
+        try:
+            at, d = tmap.map(float(ins["at"])), float(ins["dur"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if d > 0:
+            tmap.add_insert(at, d)
+            ops.append({"op": "insert", "at": at, "dur": d})
+
+
 # ════════════════════════════════════════════════════════
 #  実行（別スレッド + タイムアウト。凍結EXEでも動く）
 # ════════════════════════════════════════════════════════
@@ -241,11 +282,22 @@ def run_edit_code(code: str, src_path: str, out_path: str, log: LOG_CB,
             out = g["edit"](clip, tc)
             if out is None:
                 raise ValueError("edit() が None を返しました（clip を return してください）")
-            # 尺の整合チェック：tc.* 以外で尺を変えると字幕がズレるので警告
+            # 自己申告（tc.report / モジュール変数 edit_report）をオペログへ合成
+            reports = list(tc.reported)
+            if isinstance(g.get("edit_report"), dict):
+                reports.append(g["edit_report"])
+            for rep in reports:
+                _apply_report(tc._tmap, tc.ops, rep)
+            # 検証：「編集操作を制限する」のではなく「編集結果を記録・検証する」。
+            # 記録＋申告から計算した尺と実際の尺が合わなければ、この試行は失敗にして
+            # 書き直させる（以前は警告のみで通していた＝字幕がズレたまま採用される穴）。
             expect = tc._tmap.map(src_dur)
-            if abs(float(out.duration) - expect) > 1.0:
-                log(f"  ⚠️ 尺がSDKの記録と{abs(float(out.duration) - expect):.1f}秒ズレています"
-                    "（尺を変える操作は tc.cut / tc.fastforward 等を使ってください）")
+            drift = abs(float(out.duration) - expect)
+            if drift > 1.0:
+                raise ValueError(
+                    f"尺の検証NG: 記録・申告から期待される長さは {expect:.1f}s ですが"
+                    f"実際は {float(out.duration):.1f}s（{drift:.1f}s 不一致）。"
+                    "尺を変える操作は tc関数を使うか、edit_report/tc.report で正しく申告してください")
             fps = int(round(float(getattr(out, "fps", None) or clip.fps or 30)))
             out.write_videofile(
                 out_path, fps=max(24, min(60, fps)), codec="libx264",
@@ -295,10 +347,12 @@ def rebuild_timemap(oplog: list):
 # ルールは最小限にし、書き方はサンプルで見せる（サンプル主体の方が直感的に書ける）。
 _SDK_DOC = """
 【書き方】def edit(clip, tc): を定義し、編集後の clip を return する。ルールは2つだけ:
-1. 尺（長さ）が変わる操作は tc を使う … tc.cut([(s,e),..]) / tc.fastforward(s,e,speed)
-   / tc.rewind(at,dur) / tc.freeze(at,dur)。字幕が後工程で自動配置されるので、
-   tc を通せば絶対にズレない。
-2. それ以外は moviepy で自由に書いてよい（import可: moviepy/numpy/math/random/PIL。
+1. 尺（長さ）が変わる編集は、どちらかの方法で「記録」する（後工程の字幕がこれで追従する）:
+   a) tc関数を使う（自動記録・確実）… tc.cut([(s,e),..]) / tc.fastforward(s,e,speed)
+      / tc.rewind(at,dur) / tc.freeze(at,dur)
+   b) moviepy で自由に書き、edit_report で申告する（サンプル5）。実行後にシステムが
+      申告と実際の尺を突き合わせて検証し、合わないと書き直しになる。
+2. 尺が変わらない演出は moviepy で自由に書いてよい（import可: moviepy/numpy/math/random/PIL。
    ファイル入出力・ネットワーク・os等は禁止＝自動検査で弾かれる）。
 時刻は「元動画の秒」で書く。自由演出で区間を切り出す時は tc.t(元秒) で現在秒に変換。
 進捗コメントは tc.log("...")。tc.zoom/monochrome/flip/mosaic も使える（尺不変の定番）。
@@ -356,6 +410,16 @@ def edit(clip, tc):
                           .set_duration(d)
                           .set_position(("center", int(h * 0.82) + jitter)))
     return CompositeVideoClip(layers)    # 尺は変わっていないのでOK
+
+【サンプル5: moviepyで自由に尺を変える + edit_report で申告（tc関数を使わない書き方）】
+def edit(clip, tc):
+    from moviepy.editor import concatenate_videoclips
+    cut_start, cut_end = 10.0, 15.0      # この区間が冗長なので取り除く
+    clip = concatenate_videoclips([clip.subclip(0, cut_start), clip.subclip(cut_end)])
+    tc.report({"cuts": [{"start": cut_start, "end": cut_end}]})   # 申告（元動画の秒）
+    # 早送りなら {"speeds":[{"start":s,"end":e,"factor":2.0}]}、
+    # 静止・挿入なら {"inserts":[{"at":t,"dur":1.5}]} を申告する
+    return clip
 '''
 
 
