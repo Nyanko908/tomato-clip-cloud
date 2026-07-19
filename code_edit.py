@@ -122,6 +122,22 @@ class TC:
         self.captions = list(captions or [])   # 解析結果の字幕（text/start/end/funny）
         self.handled_captions = False          # True=字幕はコードが描いた（既定字幕を置かない）
         self.reported = []                     # tc.report()による自己申告（自由コード用）
+        self.used_assets = []                  # tc.asset()で使った素材（クレジット表示用）
+
+    def asset(self, name: str) -> str:
+        """
+        TC_DB の素材のファイルパスを返す（ImageClip / AudioFileClip にそのまま渡せる）。
+        使った素材は記録され、クレジットが必要なものは動画の引用元表示に自動で載る。
+        """
+        import tc_db
+        meta = tc_db.find_asset(str(name))
+        if not meta:
+            names = [m["name"] for m in tc_db.list_assets()][:10]
+            raise ValueError(f"素材 '{name}' はTC_DBにありません。使える素材: {names}")
+        if not any(u.get("name") == meta["name"] for u in self.used_assets):
+            self.used_assets.append(meta)
+        self.log(f"素材を使用: {meta['name']}（{meta['license']}）")
+        return meta["path"]
 
     def report(self, edit_report: dict):
         """
@@ -306,7 +322,8 @@ def run_edit_code(code: str, src_path: str, out_path: str, log: LOG_CB,
             )
             result.update({"ok": True, "oplog": tc.ops,
                            "duration": float(out.duration),
-                           "handled_captions": bool(tc.handled_captions)})
+                           "handled_captions": bool(tc.handled_captions),
+                           "used_assets": list(tc.used_assets)})
         except Exception:
             result.update({"ok": False, "error": traceback.format_exc(limit=6)})
         finally:
@@ -359,6 +376,8 @@ _SDK_DOC = """
 字幕を独自スタイルで描きたい時は tc.take_captions() を呼び、tc.captions（解析結果）と
 tc.text_image(text, size, color)（日本語対応フォントのPIL画像）で自分で描く（サンプル4）。
 呼ばなければ後工程が既定スタイルで字幕を配置する。
+素材一覧が渡されていれば tc.asset("名前") でファイルパスを取得し、ImageClip や
+AudioFileClip でオーバーレイ・効果音として使える（ライセンスは確認済み・クレジットは自動）。
 """
 
 _SAMPLES = '''
@@ -442,6 +461,12 @@ def _plugin_context(log: LOG_CB) -> str:
                     parts.append(f"【ユーザーの編集レシピ: {p.name}】\n{txt}")
             if recipes:
                 log(f"  🧩 編集レシピ {len(recipes)}件を反映")
+        # TC_DB の素材INDEX（Web検索で取得済み・ライセンス確認済みのもの）
+        import tc_db
+        idx = tc_db.asset_index_text()
+        if idx:
+            parts.append(idx)
+            log(f"  🧩 素材 {len(tc_db.list_assets())}件を提示")
     except Exception:
         pass
     return ("\n".join(parts) + "\n") if parts else ""
@@ -523,6 +548,15 @@ def apply_code_edit(client, src_path: str, analysis: dict, log: LOG_CB,
             analysis["code_oplog"] = res.get("oplog", [])
             analysis["code_intermediate"] = out_path
             analysis["code_handled_captions"] = bool(res.get("handled_captions"))
+            # 使った素材：記録＋クレジット必要なものは引用元表示に自動で載せる
+            used = res.get("used_assets") or []
+            if used:
+                analysis["used_assets"] = [u["name"] for u in used]
+                srcs = analysis.setdefault("sources", [])
+                for u in used:
+                    if u.get("attribution_required") and u.get("credit"):
+                        if not any(u["credit"] in str(s) for s in srcs):
+                            srcs.append(u["credit"])
             log(f"  ✅ Python編集完了（{res.get('duration', 0):.1f}秒 / 操作{len(res.get('oplog', []))}件"
                 + ("・字幕はコード描画" if res.get("handled_captions") else "") + "）")
             return True

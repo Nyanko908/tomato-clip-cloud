@@ -1265,9 +1265,11 @@
     }).catch(function () {});
   }
   var _AI_ICONS = { captions: "💬", cut: "✂", fastforward: "⏩", rewind: "⏪",
-                    freeze: "⏸", zoom: "🔍", monochrome: "🎞", flip: "🔁", mosaic: "🟦" };
+                    freeze: "⏸", zoom: "🔍", monochrome: "🎞", flip: "🔁", mosaic: "🟦",
+                    asset: "🖼" };
   var _AI_WORDS = { captions: "字幕", cut: "カット", fastforward: "早送り", rewind: "巻き戻し",
-                    freeze: "フリーズ", zoom: "ズーム", monochrome: "モノクロ", flip: "反転", mosaic: "モザイク" };
+                    freeze: "フリーズ", zoom: "ズーム", monochrome: "モノクロ", flip: "反転", mosaic: "モザイク",
+                    asset: "素材" };
   function edRenderEdits() {
     var box = document.getElementById("edEdits");
     if (!box) return;

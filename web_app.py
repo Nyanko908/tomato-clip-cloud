@@ -742,6 +742,8 @@ class Api:
             items.append({"k": "freeze", "t": s,
                           "label": f"{_fmt(s)} · {meta.get('freeze_duration', 1.5)}s"})
         items.sort(key=lambda x: x["t"])
+        for a in (meta.get("used_assets") or [])[:6]:
+            items.insert(0, {"k": "asset", "t": -2, "label": str(a)})
         n_caps = len(meta.get("captions") or [])
         if n_caps:
             items.insert(0, {"k": "captions", "t": -1, "label": f"{n_caps}"})

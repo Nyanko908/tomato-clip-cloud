@@ -83,6 +83,7 @@ _SYSTEM = (
     "URLが明示されていない限り必ずstart_pipelineを呼んでください。URLを聞き返してはいけません。"
     "start_from_urlはユーザーがURLを明示的に提示したときだけ使用してください。"
     "「〇〇をテーマに」「〇〇の動画」のように具体テーマがあればstart_with_keywordを使ってください。\n"
+    "「素材探して」「効果音/画像探して」はsearch_web_asset。"
     "「覚えて」「記録して」はsave_memory、「履歴見せて」「過去の動画は？」はdb_read_history、"
     "「〇〇の切り抜きしたい」「〇〇を検索して」はdb_add_search_intent（category は vtuber/gaming/funny 等）。\n"
     "「トレンド分析して」「今何が伸びてる？」はanalyze_trends。\n"
@@ -117,6 +118,12 @@ def _tools():
         gt.FunctionDeclaration(name="save_memory",
             description="ユーザーが覚えてほしいことを長期記憶に保存する",
             parameters={"type": "OBJECT", "properties": {"content": {"type": "STRING"}}, "required": ["content"]}),
+        gt.FunctionDeclaration(name="search_web_asset",
+            description="動画で使う素材（画像・効果音など）をWebから探し、ライセンスを確認して保存する（商用利用可のみ。以後の動画編集AIが使える）",
+            parameters={"type": "OBJECT", "properties": {
+                "query": {"type": "STRING", "description": "探す素材の内容（例: explosion, 拍手, 猫）"},
+                "kind": {"type": "STRING", "description": "image か audio（省略時 image）"}},
+                "required": ["query"]}),
         gt.FunctionDeclaration(name="stop_process",
             description="実行中の生成を停止する",
             parameters={"type": "OBJECT", "properties": {}, "required": []}),
@@ -214,6 +221,8 @@ class ChatEngine:
             self._add_intent(args)
         elif name == "save_memory":
             self._save_memory(args)
+        elif name == "search_web_asset":
+            self._search_asset(args)
         elif name == "stop_process":
             if self.stop_event:
                 self.stop_event.set()
@@ -378,3 +387,33 @@ class ChatEngine:
         except Exception:
             pass
         self._emit("on_text", f"✅ 覚えました：{content}")
+
+    def _search_asset(self, args):
+        """Webから素材を検索・ライセンス確認して TC_DB に保存する。"""
+        query = (args.get("query") or "").strip()
+        kind = (args.get("kind") or "image").strip().lower()
+        if kind not in ("image", "audio"):
+            kind = "image"
+        if not query:
+            self._emit("on_text", "探す素材の内容が分かりませんでした。")
+            return
+        self._emit("on_text", f"🔎 素材を探しています: {query}（{'効果音' if kind == 'audio' else '画像'}）...")
+        try:
+            import tc_db
+            logs = []
+            meta = tc_db.acquire(query, kind=kind, log=lambda m: logs.append(str(m)))
+        except Exception as e:
+            self._emit("on_text", f"⚠️ 素材検索でエラーが発生しました: {e}")
+            return
+        if not meta:
+            self._emit("on_text", (logs[-1] if logs else "") +
+                       "\n商用利用可（CC0/パブリックドメイン/CC BY系）の素材だけを保存する方針のため、"
+                       "見つからないことがあります。別の言葉（英語推奨）でもう一度試してください。")
+            return
+        cred = f"\n📎 クレジット: {meta['credit']}（動画で使うと引用元に自動表示されます）" \
+            if meta.get("attribution_required") else ""
+        self._emit("on_text",
+                   f"✅ 素材を保存しました：**{meta['name']}**\n"
+                   f"・種類: {meta['kind']} / ライセンス: {meta['license']}\n"
+                   f"・出所: {meta['page_url']}{cred}\n"
+                   "次の動画生成から、編集AIが tc.asset(\"" + meta["name"] + "\") で使えます。")
