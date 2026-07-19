@@ -88,6 +88,90 @@ def save_config(cfg: dict):
         return False
 
 
+# ── ローカルメディア配信 ─────────────────────────────────────
+# pywebview 6.x はローカルHTMLを内蔵HTTPサーバー経由で配信するため、ページの
+# 原点が http://127.0.0.1:<port> になる。その原点から file:/// の動画を <video> に
+# 渡すと Chromium が「Media load rejected by URL safety check」で拒否し、
+# カードが真っ黒(0:00)になる（実測）。動画ファイル自体は正常。
+# 対策＝クラウド版(/media配信)と同じ思想で、出力フォルダを 127.0.0.1 の
+# 使い捨てポートから配信し、UIへは常に http URL を渡す。
+
+import http.server as _http_server
+import re as _re
+
+
+class _MediaHTTPHandler(_http_server.SimpleHTTPRequestHandler):
+    """動画配信用のRange対応ハンドラ（WebView2のシークに必須）。アクセスログは出さない。"""
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):
+        pass
+
+    def send_head(self):
+        path = self.translate_path(self.path)
+        if os.path.isdir(path):
+            self.send_error(403)
+            return None
+        try:
+            f = open(path, "rb")
+        except OSError:
+            self.send_error(404)
+            return None
+        try:
+            size = os.fstat(f.fileno()).st_size
+            rng = self.headers.get("Range") or ""
+            m = _re.match(r"bytes=(\d*)-(\d*)$", rng)
+            if m and (m.group(1) or m.group(2)):
+                start = int(m.group(1)) if m.group(1) else max(0, size - int(m.group(2)))
+                end = int(m.group(2)) if (m.group(1) and m.group(2)) else size - 1
+                end = min(end, size - 1)
+                if start > end or start >= size:
+                    self.send_error(416)
+                    f.close()
+                    return None
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                length = end - start + 1
+                f.seek(start)
+            else:
+                self.send_response(200)
+                length = size
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Type", self.guess_type(path))
+            self.send_header("Content-Length", str(length))
+            self.end_headers()
+            self._range_length = length
+            return f
+        except Exception:
+            f.close()
+            raise
+
+    def copyfile(self, source, outputfile):
+        remaining = getattr(self, "_range_length", None)
+        if remaining is None:
+            return super().copyfile(source, outputfile)
+        while remaining > 0:
+            chunk = source.read(min(64 * 1024, remaining))
+            if not chunk:
+                break
+            outputfile.write(chunk)
+            remaining -= len(chunk)
+
+
+def _start_media_server(root: Path) -> int:
+    """root を 127.0.0.1 の空きポートで配信してポート番号を返す。"""
+    import socketserver, functools
+    handler = functools.partial(_MediaHTTPHandler, directory=str(root))
+
+    class _Srv(socketserver.ThreadingTCPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    srv = _Srv(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv.server_address[1]
+
+
 def _setup_media_env():
     """生成（moviepy編集）のための ffmpeg パス設定 & PIL 互換パッチ。"""
     try:
@@ -120,11 +204,41 @@ class Api:
         except Exception:
             self._license = None
         self.engine = self._new_engine()
+        # 動画をUIへ渡すためのローカル配信（file:///はWebView2に拒否されるため）
+        self._media_root = Path.home() / "TomatoClip_Output"
+        try:
+            self._media_root.mkdir(parents=True, exist_ok=True)
+            self._media_port = _start_media_server(self._media_root)
+        except Exception:
+            self._media_port = None
         # 既存の予約があれば起動時にウォッチャーを再開
         try:
             self._ensure_schedule_watcher()
         except Exception:
             pass
+
+    # ── ローカル配信URL（デスクトップ専用。クラウドは CloudApi の /media が担う） ──
+    def _local_media_url(self, path) -> str:
+        port = getattr(self, "_media_port", None)
+        root = getattr(self, "_media_root", None)
+        if not port or not root or not path:
+            return ""
+        try:
+            rel = Path(path).resolve().relative_to(Path(root).resolve())
+        except Exception:
+            return ""
+        from urllib.parse import quote
+        return f"http://127.0.0.1:{port}/" + quote(str(rel).replace("\\", "/"))
+
+    def _local_reverse_media(self, url) -> str:
+        """配信URL → 実ファイルパス（フォルダで開く等のため）。それ以外はそのまま返す。"""
+        port = getattr(self, "_media_port", None)
+        root = getattr(self, "_media_root", None)
+        prefix = f"http://127.0.0.1:{port}/" if port else None
+        if prefix and root and str(url).startswith(prefix):
+            from urllib.parse import unquote
+            return str(Path(root) / unquote(str(url)[len(prefix):]))
+        return url
 
     # ---- engine ----
     def _new_engine(self):
@@ -152,7 +266,13 @@ class Api:
                 pass
 
     def _on_ai_video(self, d):
-        self._js("addVideoCard", d)
+        # UIへは再生できる http URL、会話履歴には元のパスを保存する
+        # （配信ポートは起動ごとに変わるため、URLを永続化してはいけない）
+        ui = dict(d) if isinstance(d, dict) else {}
+        mu = self._local_media_url(ui.get("path", ""))
+        if mu:
+            ui["path"] = mu
+        self._js("addVideoCard", ui)
         cid = getattr(self, "current_cid", None)
         if cid:
             try:
@@ -254,8 +374,26 @@ class Api:
             elif m.get("kind") == "ai":
                 hist.append({"role": "model", "parts": [m.get("text", "")]})
         self.engine.history = hist
+        # 動画カードのパスを再生可能なURLへ変換して返す（保存データは変更しない）。
+        # デスクトップ=ローカル配信URL、クラウド=CloudApiの /media URL。
+        msgs = []
+        for m in d.get("messages", []):
+            if m.get("kind") == "video" and isinstance(m.get("data"), dict):
+                m = dict(m)
+                data = dict(m["data"])
+                p = data.get("path", "")
+                mu = self._local_media_url(p)
+                if not mu and hasattr(self, "_media_url"):
+                    try:
+                        mu = self._media_url(p)
+                    except Exception:
+                        mu = ""
+                if mu:
+                    data["path"] = mu
+                m["data"] = data
+            msgs.append(m)
         return {"ok": True, "id": cid, "title": d.get("title", ""),
-                "messages": d.get("messages", [])}
+                "messages": msgs}
 
     def delete_conversation(self, cid):
         try:
@@ -560,7 +698,8 @@ class Api:
                 if not path or not os.path.exists(path):
                     continue          # 消された動画は出さない
                 out.append({"id": r["id"], "title": r["title"] or "動画",
-                            "path": path, "yt_url": r["yt_url"] or "",
+                            "path": self._local_media_url(path) or path,
+                            "yt_url": r["yt_url"] or "",
                             "posted_at": r["posted_at"] or ""})
         except Exception:
             return []
@@ -1151,6 +1290,7 @@ class Api:
 
     def open_file(self, path):
         try:
+            path = self._local_reverse_media(path)   # 配信URLで来ても実パスに戻す
             folder = str(Path(path).parent)
             os.startfile(folder)  # Windows
         except Exception:
@@ -1158,6 +1298,7 @@ class Api:
         return True
 
     def post_video(self, path):
+        path = self._local_reverse_media(path)
         # Phase 1 では投稿は未実装（次フェーズ）。案内だけ返す。
         self._js("addAiText", "YouTube への投稿は次のアップデートで対応予定です（動画は保存済みです）。")
         return True
