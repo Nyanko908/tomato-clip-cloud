@@ -303,6 +303,8 @@
       chatUI.closeStats && chatUI.closeStats();
       chatUI.closeSchedule && chatUI.closeSchedule();
       chatUI.closeCloud && chatUI.closeCloud();
+    chatUI.closeLibraryPanel && chatUI.closeLibraryPanel();
+      chatUI.closeLibraryPanel && chatUI.closeLibraryPanel();
       var a = api(); if (!a || !a.load_conversation) return;
       a.load_conversation(cid).then(function (d) {
         try { d = typeof d === "string" ? JSON.parse(d) : d; } catch (e) {}
@@ -344,6 +346,8 @@
       chatUI.closeStats && chatUI.closeStats();
       chatUI.closeSchedule && chatUI.closeSchedule();
       chatUI.closeCloud && chatUI.closeCloud();
+    chatUI.closeLibraryPanel && chatUI.closeLibraryPanel();
+      chatUI.closeLibraryPanel && chatUI.closeLibraryPanel();
       el.thread.innerHTML = "";
       el.thread.style.display = "none";
       el.welcome.style.display = "flex";
@@ -459,6 +463,7 @@
     chatUI.closeSearch && chatUI.closeSearch();
     chatUI.closeStats && chatUI.closeStats();
     chatUI.closeSchedule && chatUI.closeSchedule();
+    chatUI.closeLibraryPanel && chatUI.closeLibraryPanel();
     cloudShowScreen("A");
     var p = document.getElementById("cloudPanel"); if (p) p.style.display = "flex";
     refreshCloudStatus();
@@ -634,6 +639,7 @@
     chatUI.closeSearch && chatUI.closeSearch();
     chatUI.closeStats && chatUI.closeStats();
     chatUI.closeCloud && chatUI.closeCloud();
+    chatUI.closeLibraryPanel && chatUI.closeLibraryPanel();
     var p = document.getElementById("schedulePanel"); if (p) p.style.display = "flex";
     if (!_schedMonth) _schedMonth = firstOf(new Date());
     wirePalette();
@@ -1095,20 +1101,34 @@
     document.querySelectorAll(".ed-tab").forEach(function (b) {
       b.classList.toggle("on", b.getAttribute("data-tab") === name);
     });
-    var panes = { assets: "edAssets", library: "edLibrary", script: "edScript", edits: "edEdits" };
+    var panes = { assets: "edAssets", script: "edScript", edits: "edEdits" };
     Object.keys(panes).forEach(function (k) {
       var n = document.getElementById(panes[k]);
       if (n) n.style.display = (k === name) ? "" : "none";
     });
-    if (name === "library") edRenderLibrary();
     if (name === "script") edLoadScript();
     if (name === "edits") edRenderEdits();
     edApplySearch();
   }
 
-  // ライブラリタブ：生成した動画の一覧（日時と長さつき）。クリックでエディタに読み込む
-  function edRenderLibrary() {
-    var box = document.getElementById("edLibrary");
+  // ライブラリ（サイドバー→全面ビュー）：生成した動画の一覧（日時と長さつき）。
+  // 行クリックでエディタに読み込む。
+  chatUI.openLibraryPanel = function () {
+    var p = document.getElementById("libraryPanel");
+    if (!p) return;
+    chatUI.closeSearch && chatUI.closeSearch();
+    chatUI.closeStats && chatUI.closeStats();
+    chatUI.closeSchedule && chatUI.closeSchedule();
+    chatUI.closeCloud && chatUI.closeCloud();
+    p.style.display = "flex";
+    renderLibraryList();
+  };
+  chatUI.closeLibraryPanel = function () {
+    var p = document.getElementById("libraryPanel");
+    if (p) p.style.display = "none";
+  };
+  function renderLibraryList() {
+    var box = document.getElementById("libraryList");
     if (!box) return;
     var a = api();
     if (!a || !a.list_videos) return;
@@ -1145,17 +1165,15 @@
                             row.getAttribute("data-vid"));
         });
       });
-      edApplySearch();
     }).catch(function () {});
   }
 
-  // 検索欄：素材タブは名前、台本タブは本文、ライブラリはタイトルで絞り込む
+  // 検索欄：素材タブは名前、台本タブは本文で絞り込む
   function edApplySearch() {
     var inp = document.getElementById("edSearch");
     var q = ((inp && inp.value) || "").trim().toLowerCase();
     var sel = _edTab === "script" ? "#edScript .ed-line" :
-              _edTab === "assets" ? "#edAssets .ed-asset" :
-              _edTab === "library" ? "#edLibrary .ed-lib-row" : null;
+              _edTab === "assets" ? "#edAssets .ed-asset" : null;
     if (!sel) return;
     document.querySelectorAll(sel).forEach(function (n) {
       n.style.display = (!q || (n.textContent || "").toLowerCase().indexOf(q) >= 0) ? "" : "none";
@@ -1516,6 +1534,7 @@
     chatUI.closeSearch && chatUI.closeSearch();
     chatUI.closeSchedule && chatUI.closeSchedule();
     chatUI.closeCloud && chatUI.closeCloud();
+    chatUI.closeLibraryPanel && chatUI.closeLibraryPanel();
     loadDashboard(false);
   };
   chatUI.refreshDashboard = function () { loadDashboard(true); };
@@ -1753,6 +1772,7 @@
     chatUI.closeStats && chatUI.closeStats();
     chatUI.closeSchedule && chatUI.closeSchedule();
     chatUI.closeCloud && chatUI.closeCloud();
+    chatUI.closeLibraryPanel && chatUI.closeLibraryPanel();
     var panel = document.getElementById("searchPanel");
     if (panel) panel.style.display = "flex";
     var inp = document.getElementById("searchInput");

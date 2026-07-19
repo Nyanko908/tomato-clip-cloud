@@ -198,7 +198,17 @@
   .ed-asset.on .thumb{outline:2px solid var(--tomato);outline-offset:1px;}
   .ed-empty{grid-column:1/-1;color:var(--faint);font-size:12.5px;text-align:center;padding:22px 6px;}
 
-  /* ライブラリタブ：生成した動画の一覧（日時・長さつき） */
+  /* ライブラリ（サイドバー→本文全面ビュー）：生成した動画の一覧（日時・長さつき） */
+  .lib-panel{position:absolute;top:52px;left:0;right:0;bottom:0;background:var(--ground);
+    z-index:20;overflow-y:auto;display:flex;justify-content:center;padding:8px 24px 48px;}
+  .lib-col{width:100%;max-width:680px;}
+  .lib-head{display:flex;align-items:center;justify-content:space-between;padding:18px 4px 6px;}
+  .lib-head h2{font-size:18px;font-weight:700;}
+  .lib-panel .ed-lib-row{padding:10px 8px;}
+  .lib-panel .lthumb{flex:0 0 150px;}
+  .lib-panel .lname{font-size:14px;}
+  .lib-panel .ldate{font-size:12px;}
+
   .ed-lib{flex:1;overflow-y:auto;padding:4px 8px 12px;}
   .ed-lib-row{display:flex;gap:10px;align-items:center;padding:7px 6px;border-radius:10px;cursor:pointer;}
   .ed-lib-row:hover{background:var(--hover);}
@@ -638,7 +648,7 @@
         <span data-i18n="新しい会話">新しい会話</span>
       </button>
       <button class="navitem" onclick="chatUI.openSearch&&chatUI.openSearch()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg><span data-i18n="検索">検索</span></button>
-      <button class="navitem"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="5" height="16" rx="1.2"/><rect x="10" y="4" width="5" height="16" rx="1.2"/><path d="M18.5 5.2 21 20"/></svg><span data-i18n="ライブラリ">ライブラリ</span></button>
+      <button class="navitem" onclick="chatUI.openLibraryPanel&&chatUI.openLibraryPanel()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="5" height="16" rx="1.2"/><rect x="10" y="4" width="5" height="16" rx="1.2"/><path d="M18.5 5.2 21 20"/></svg><span data-i18n="ライブラリ">ライブラリ</span></button>
       <button class="navitem" onclick="chatUI.openCloud&&chatUI.openCloud()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 0 0 .5-8.98 6 6 0 0 0-11.64-1.5A4 4 0 0 0 6.5 19Z"/></svg><span data-i18n="クラウド">クラウド</span></button>
       <button class="navitem" onclick="chatUI.openPlugins&&chatUI.openPlugins()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 3v3.5a1.5 1.5 0 0 0 3 0V3M3 10.5h3.5a1.5 1.5 0 0 1 0 3H3M14 21v-3.2a1.6 1.6 0 0 1 1.6-1.6H21"/><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg><span data-i18n="プラグイン">プラグイン</span></button>
       <div class="sec" data-i18n="会話履歴">会話履歴</div>
@@ -715,6 +725,17 @@
         </div>
         <div class="search-recent-label" id="searchLabel" data-i18n="最近">最近</div>
         <div id="searchResults" class="search-results"></div>
+      </div>
+    </div>
+
+    <!-- ライブラリ：生成した動画の一覧（サイドバー右の本文エリア全面） -->
+    <div class="lib-panel" id="libraryPanel" style="display:none">
+      <div class="lib-col">
+        <div class="lib-head">
+          <h2 data-i18n="ライブラリ">ライブラリ</h2>
+          <button class="toolbtn" onclick="chatUI.closeLibraryPanel()" aria-label="閉じる" data-i18n-title="閉じる" title="閉じる">✕</button>
+        </div>
+        <div id="libraryList"></div>
       </div>
     </div>
 
@@ -843,7 +864,6 @@
       <div class="ed-rail">
         <div class="ed-tabs">
           <button class="ed-tab on" data-tab="assets" data-i18n="素材">素材</button>
-          <button class="ed-tab" data-tab="library" data-i18n="ライブラリ">ライブラリ</button>
           <button class="ed-tab" data-tab="script" data-i18n="台本">台本</button>
           <button class="ed-tab" data-tab="edits" data-i18n="編集">編集</button>
         </div>
@@ -852,7 +872,6 @@
           <input type="text" id="edSearch" data-i18n-ph="検索" placeholder="検索">
         </div>
         <div class="ed-assets" id="edAssets"></div>
-        <div class="ed-lib" id="edLibrary" style="display:none"></div>
         <div class="ed-script" id="edScript" style="display:none"></div>
         <div class="ed-edits" id="edEdits" style="display:none"></div>
       </div>
